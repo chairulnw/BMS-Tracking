@@ -3,7 +3,8 @@ import { Dashboard } from './pages/overview/overview';
 import { Liveview } from './pages/liveview/liveview';
 import { Playback } from './pages/playback/playback';
 import { Eventlog } from './pages/eventlog/eventlog';
-import { Pengaturan } from './pages/pengaturan/pengaturan';
+import { CameraPage } from './pages/camera/camera';
+import { ZonePage } from './pages/zone/zone';
 import { People } from './pages/people/people';
 import { Login } from './pages/login/login';
 import { authGuard } from './guards/auth.guard';
@@ -16,6 +17,7 @@ export const routes: Routes = [
   { path: 'liveview', component: Liveview, canActivate: [authGuard] },
   { path: 'playback', component: Playback, canActivate: [authGuard] },
   { path: 'eventlog', component: Eventlog, canActivate: [authGuard] },
-  { path: 'pengaturan', component: Pengaturan, canActivate: [authGuard] },
+  { path: 'camera', component: CameraPage, canActivate: [authGuard] },
+  { path: 'zone', component: ZonePage, canActivate: [authGuard] },
   { path: 'people', component: People, canActivate: [authGuard] },
 ];

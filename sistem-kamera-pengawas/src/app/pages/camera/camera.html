@@ -1,11 +1,11 @@
 <div class="page">
 
-  <!-- ── Section 1: Daftar Kamera ─────────────────────────────── -->
+  <!-- ── Daftar Kamera ─────────────────────────────────────────── -->
   <div class="card">
     <div class="card-header">
       <div>
         <h2 class="card-title">Daftar Kamera</h2>
-        <p class="card-sub">Kelola streaming dan penempatan zona</p>
+        <p class="card-sub">Kelola streaming dan penempatan kamera</p>
       </div>
       <div class="stream-controls">
         <div [ngClass]="['stream-status', streamRunning ? 'stream-status--on' : '']">
@@ -127,156 +127,6 @@
     </table>
   </div>
 
-  <!-- ── Section 2: Konfigurasi Zona Deteksi ───────────────────── -->
-  <div class="card zone-card">
-    <div class="zone-top">
-      <div>
-        <h2 class="card-title">Konfigurasi Zona Deteksi</h2>
-        <p class="card-sub">Gambar garis masuk untuk menghitung okupansi ruangan secara real-time.</p>
-      </div>
-      <div class="cam-select-group">
-        <label class="select-label">PILIH KAMERA</label>
-        <div class="select-wrap">
-          <select class="cam-select" (change)="onSelectChange($event)">
-            <option value="" disabled [selected]="!selectedCamera">Pilih kamera...</option>
-            @for (cam of cameras; track cam.id) {
-              <option [value]="cam.id" [selected]="selectedCamera?.id === cam.id">
-                {{ cam.camera_id ?? cam.name }}
-              </option>
-            }
-          </select>
-          <svg class="select-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none">
-            <path d="M3 5l4 4 4-4" stroke="#6A7282" stroke-width="1.5" stroke-linecap="round"/>
-          </svg>
-        </div>
-      </div>
-    </div>
-
-    <div class="zone-body">
-      <!-- Snapshot + canvas -->
-      <div class="snapshot-wrap">
-        @if (!selectedCamera) {
-          <div class="snap-placeholder">Pilih kamera untuk melihat snapshot</div>
-        } @else if (snapshotError) {
-          <div class="snap-placeholder snap-placeholder--err">
-            <svg width="36" height="36" viewBox="0 0 48 48" fill="none" opacity="0.4">
-              <rect x="2" y="10" width="32" height="22" rx="3" stroke="white" stroke-width="2"/>
-              <path d="M34 19l12-6v22l-12-6V19z" stroke="white" stroke-width="2" stroke-linejoin="round"/>
-            </svg>
-            <span>Stream belum berjalan atau kamera tidak ditemukan</span>
-            <button class="btn-ghost" (click)="refreshSnapshot()">Coba Lagi</button>
-          </div>
-        } @else {
-          <div class="snap-inner">
-            <img
-              #snapshotImg
-              class="snap-img"
-              [src]="snapshotUrl | authUrl"
-              (load)="onSnapshotLoad()"
-              (error)="onSnapshotError()"
-              alt="snapshot" />
-            <canvas
-              #zoneCanvas
-              class="snap-canvas"
-              (click)="onCanvasClick($event)">
-            </canvas>
-            <div class="snap-hint">Klik 2 titik untuk menggambar garis crossing</div>
-          </div>
-        }
-
-        <div class="snap-actions">
-          <button
-            class="btn-action"
-            [disabled]="!pendingLine"
-            (click)="addZone()">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-              <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            </svg>
-            Add Zone
-          </button>
-          <button
-            class="btn-action"
-            [disabled]="!pendingLine"
-            (click)="flipInSign()"
-            title="Balik arah IN/OUT">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-              <path d="M7 16V4m0 0L3 8m4-4l4 4M17 8v12m0 0l4-4m-4 4l-4-4"
-                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-            Flip IN/OUT
-          </button>
-          <button class="btn-action" (click)="clearZone()">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-              <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            </svg>
-            Clear Zone
-          </button>
-          @if (savedLines.length > 0) {
-            <button class="btn-action btn-action--danger" (click)="deleteAllLines()">
-              Hapus Semua Garis
-            </button>
-          }
-        </div>
-
-        <!-- Legend saved lines -->
-        @if (savedLines.length > 0) {
-          <div class="line-legend">
-            @for (line of savedLines; track line.id; let i = $index) {
-              <span class="legend-item">
-                <span class="legend-dot" [style.background]="lineColor(i)"></span>
-                Garis {{ i + 1 }}
-              </span>
-            }
-          </div>
-        }
-      </div>
-
-      <!-- Detail Zona panel -->
-      @if (showZoneForm) {
-        <div class="zone-detail">
-          <div class="zone-detail-title">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-              <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-              <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-            </svg>
-            Detail Zona
-          </div>
-          <label class="field-label">NAMA RUANGAN</label>
-          <input
-            class="field-input"
-            type="text"
-            placeholder="Contoh: Area Lift"
-            [value]="roomName"
-            (input)="roomName = $any($event.target).value" />
-          <button class="btn-save" (click)="saveZone()">Simpan</button>
-        </div>
-      }
-    </div>
-  </div>
-
-  <!-- ── Section 3: Stub — Jam Kerja & Notifikasi ───────────────── -->
-  <div class="bottom-row">
-    <div class="card stub-card">
-      <div class="stub-header">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-          <circle cx="12" cy="12" r="10" stroke="#6A7282" stroke-width="1.8"/>
-          <path d="M12 6v6l4 2" stroke="#6A7282" stroke-width="1.8" stroke-linecap="round"/>
-        </svg>
-        <span>Jam Kerja &amp; Penjadwalan</span>
-      </div>
-      <p class="stub-note">Fitur ini belum diaktifkan.</p>
-    </div>
-    <div class="card stub-card">
-      <div class="stub-header">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-          <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0" stroke="#6A7282" stroke-width="1.8" stroke-linecap="round"/>
-        </svg>
-        <span>Saluran Notifikasi</span>
-      </div>
-      <p class="stub-note">Fitur ini belum diaktifkan.</p>
-    </div>
-  </div>
-
 </div>
 
 <!-- ── Modal Tambah / Edit Kamera ──────────────────────────────── -->
@@ -303,8 +153,6 @@
         <label class="field-label">RTSP URL</label>
         <input class="field-input" type="text" placeholder="rtsp://user:pass@host/stream"
           [value]="formRtspUrl" (input)="formInput('rtspUrl', $event)" />
-
-
       </div>
       <div class="modal-footer">
         <button class="btn-ghost" (click)="closeModal()">Batal</button>

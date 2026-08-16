@@ -4,3 +4,4 @@ asyncpg>=0.29.0
 python-dotenv>=1.0.0
 bcrypt>=4.2.0
 PyJWT>=2.9.0
+httpx>=0.28.0
