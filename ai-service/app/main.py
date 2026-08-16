@@ -1,0 +1,82 @@
+import logging
+import os
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+import torch
+import torchreid
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from ultralytics import YOLO
+
+load_dotenv()   # baca .env sebelum apapun
+
+from app.auth import get_current_user
+from app.routers import health, identities, snapshot, stream, video
+from app.services.stream_service import StreamManager
+
+# ── Suppress noisy polling routes dari access log uvicorn ─────────────────────
+_SILENT_PATHS = frozenset(["/stream/ambiguous"])
+
+class _PollFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return not any(p in msg for p in _SILENT_PATHS)
+
+logging.getLogger("uvicorn.access").addFilter(_PollFilter())
+
+YOLO_MODEL = "yolo26n.pt"
+REID_MODEL = "osnet_ain_x1_0"
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"[startup] device: {device}")
+
+    app.state.yolo_model = YOLO_MODEL
+    app.state.reid_model = REID_MODEL
+
+    print(f"[startup] loading YOLO ({YOLO_MODEL})…")
+    app.state.detector = YOLO(YOLO_MODEL)
+
+    print(f"[startup] loading OSNet ({REID_MODEL})…")
+    _msmt17 = Path.home() / ".cache/torch/checkpoints/osnet_ain_x1_0_msmt17.pt"
+    app.state.extractor = torchreid.utils.FeatureExtractor(
+        model_name=REID_MODEL,
+        model_path=str(_msmt17) if _msmt17.exists() else "",
+        device=device,
+    )
+
+    app.state.stream_manager = StreamManager()
+    print("[startup] models ready\n")
+
+    yield
+
+    print("[shutdown] stopping stream (if running)…")
+    app.state.stream_manager.stop()
+    app.state.detector  = None
+    app.state.extractor = None
+
+
+app = FastAPI(
+    title="BMS AI Service",
+    description="Person detection, tracking, ReID, dan line crossing untuk sistem kamera pengawas.",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
+cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:4200").split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(health.router)
+app.include_router(video.router, dependencies=[Depends(get_current_user)])
+app.include_router(identities.router, dependencies=[Depends(get_current_user)])
+app.include_router(stream.router, dependencies=[Depends(get_current_user)])
+app.include_router(snapshot.router, dependencies=[Depends(get_current_user)])

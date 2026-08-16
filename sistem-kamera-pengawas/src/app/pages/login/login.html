@@ -1,0 +1,30 @@
+<div class="login-page">
+  <form class="login-card" (submit)="$event.preventDefault(); submit()">
+    <h1 class="login-title">BMS-IIP</h1>
+    <p class="login-sub">Masuk untuk mengakses dashboard pengawasan</p>
+
+    <label class="field-label">USERNAME</label>
+    <input
+      class="field-input"
+      type="text"
+      autocomplete="username"
+      [value]="username"
+      (input)="onUsernameInput($event)" />
+
+    <label class="field-label">PASSWORD</label>
+    <input
+      class="field-input"
+      type="password"
+      autocomplete="current-password"
+      [value]="password"
+      (input)="onPasswordInput($event)" />
+
+    @if (error()) {
+      <p class="login-error">{{ error() }}</p>
+    }
+
+    <button class="btn-login" type="submit" [disabled]="loading()">
+      {{ loading() ? 'Memproses…' : 'Masuk' }}
+    </button>
+  </form>
+</div>

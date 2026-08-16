@@ -1,0 +1,45 @@
+<div class="topbar">
+  <div class="topbar-left">
+    <button class="icon-btn">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+        <path d="M3 5h14M3 10h14M3 15h14" stroke="#D1D5DC" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+    </button>
+    <div class="search-bar">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <circle cx="6.5" cy="6.5" r="4.5" stroke="#6A7282" stroke-width="1.4"/>
+        <path d="M10.5 10.5L13.5 13.5" stroke="#6A7282" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+      <input type="text" placeholder="Search" />
+    </div>
+  </div>
+  <div class="topbar-right">
+    <button class="nav-action">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+        <rect x="2" y="4" width="16" height="12" rx="2" stroke="#D1D5DC" stroke-width="1.4"/>
+        <path d="M2 7l8 5 8-5" stroke="#D1D5DC" stroke-width="1.4"/>
+      </svg>
+      <span>Message</span>
+    </button>
+    <button class="nav-action">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+        <path d="M10 2a5.5 5.5 0 00-5.5 5.5v3L3 13h14l-1.5-2.5V7.5A5.5 5.5 0 0010 2z" stroke="#D1D5DC" stroke-width="1.4"/>
+        <path d="M8 15a2 2 0 004 0" stroke="#D1D5DC" stroke-width="1.4"/>
+      </svg>
+      <span>Notification</span>
+    </button>
+    <div class="admin-info" (click)="toggleMenu()">
+      <div class="avatar">AS</div>
+      <span class="admin-name">Admin SPOT</span>
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <path d="M4 6l4 4 4-4" stroke="#D1D5DC" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+
+      @if (menuOpen) {
+        <div class="admin-menu">
+          <button class="admin-menu-item" (click)="logout()">Keluar</button>
+        </div>
+      }
+    </div>
+  </div>
+</div>

@@ -1,0 +1,12 @@
+ultralytics>=8.3.0
+requests>=2.32.0
+opencv-python>=4.10.0
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-dotenv>=1.0.0
+PyJWT>=2.9.0
+# torchreid: install from source jika pip install torchreid gagal
+# pip install git+https://github.com/KaiyangZhou/deep-person-reid.git
+torchreid
+gdown
+tensorboard

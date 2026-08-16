@@ -1,0 +1,293 @@
+<!-- ── Ambiguous ReID — Perlu Verifikasi (disabled) ───────────────────────── -->
+<!-- @if (ambiguous.length > 0) {
+  <div class="ambiguous-section">
+    <div class="ambiguous-header">
+      <span class="ambiguous-title">PERLU VERIFIKASI</span>
+      <span class="ambiguous-count">{{ ambiguous.length }}</span>
+    </div>
+    <div class="ambiguous-list">
+      @for (amb of ambiguous; track amb.id) {
+        <div class="amb-card">
+          <div class="amb-thumb">
+            <img [src]="ambSnapshotUrl(amb)" alt="crop" class="amb-img" />
+          </div>
+          <div class="amb-info">
+            <div class="amb-candidate">Kandidat: <strong>{{ amb.candidate }}</strong></div>
+            <div class="amb-scores">
+              sim={{ (amb.sim_top1 * 100).toFixed(1) }}%&nbsp;
+              margin={{ (amb.margin * 100).toFixed(1) }}%&nbsp;
+              cam={{ amb.cam_id }}&nbsp;track#{{ amb.track_id }}
+            </div>
+            <div class="amb-time">{{ amb.timestamp | slice:11:16 }}</div>
+          </div>
+          <div class="amb-actions">
+            <button class="btn-confirm" (click)="resolveAmbiguous(amb, 'confirm')">Konfirmasi</button>
+            <button class="btn-assign"  (click)="toggleAssignPicker(amb.id)">Assign ke...</button>
+            <button class="btn-reject"  (click)="resolveAmbiguous(amb, 'reject')">Orang Baru</button>
+          </div>
+          @if (assigningAmbId === amb.id) {
+            <div class="assign-picker">
+              <div class="assign-picker-label">Pilih orang:</div>
+              @for (p of people; track p.id) {
+                <div class="assign-option" (click)="assignAmbiguous(amb, p)">
+                  <span class="assign-option-name">{{ p.name }}</span>
+                  <span class="assign-option-label">{{ p.label }}</span>
+                </div>
+              }
+              @empty {
+                <div class="assign-option-empty">Belum ada orang terdeteksi</div>
+              }
+            </div>
+          }
+        </div>
+      }
+    </div>
+  </div>
+} -->
+
+<div class="people-layout">
+
+  <!-- ── Left: Person List ─────────────────── -->
+  <div class="list-panel">
+
+    <div class="search-row">
+      <div class="search-bar">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <circle cx="6.5" cy="6.5" r="4.5" stroke="#6A7282" stroke-width="1.4"/>
+          <path d="M10.5 10.5L13.5 13.5" stroke="#6A7282" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+        <input type="text" placeholder="Cari nama..." [value]="searchQuery" (input)="onSearch($event)" />
+      </div>
+      <button
+        class="sort-toggle-btn"
+        [title]="sortMode === 'terbaru' ? 'Urutkan: Terbaru (klik untuk A-Z)' : 'Urutkan: Nama A-Z (klik untuk Terbaru)'"
+        (click)="toggleSort()">
+        @if (sortMode === 'terbaru') {
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/>
+            <path d="M12 7v5l3.5 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        } @else {
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+            <path d="M4 6h11M4 12h7M4 18h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            <path d="M17 15l3 3 3-3M20 18V6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        }
+      </button>
+    </div>
+
+    <div class="filter-tabs">
+      <button
+        [ngClass]="['tab', activeFilter === 'semua' ? 'tab--active' : '']"
+        (click)="setFilter('semua')">
+        Semua <span class="badge">{{ semualCount }}</span>
+      </button>
+      <button
+        [ngClass]="['tab', activeFilter === 'terdaftar' ? 'tab--active' : '']"
+        (click)="setFilter('terdaftar')">
+        Terdaftar <span class="badge">{{ terdaftarCount }}</span>
+      </button>
+      <button
+        [ngClass]="['tab', activeFilter === 'unknown' ? 'tab--active' : '']"
+        (click)="setFilter('unknown')">
+        Unknown <span class="badge">{{ unknownCount }}</span>
+      </button>
+      <div class="date-bar">
+        <input
+          type="date"
+          [value]="selectedDate"
+          (change)="onDateChange($event)" />
+      </div>
+    </div>
+
+    <div class="person-list">
+      @for (person of filteredPeople; track person.id) {
+        <div
+          [ngClass]="['person-card', selectedPerson?.id === person.id ? 'person-card--selected' : '']"
+          (click)="selectPerson(person)">
+          <div class="person-thumb">
+            @if (person.thumbnailUrl) {
+              <img [src]="person.thumbnailUrl | authUrl" class="person-thumb-img" alt="thumbnail" />
+            } @else {
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="8" r="4" stroke="#6A7282" stroke-width="1.4"/>
+                <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke="#6A7282" stroke-width="1.4" stroke-linecap="round"/>
+              </svg>
+            }
+          </div>
+          <div class="person-info">
+            <div class="person-name-row">
+              @if (renamingId === person.id) {
+                <input
+                  class="rename-input"
+                  type="text"
+                  [value]="renameInput"
+                  (input)="renameInput = $any($event.target).value"
+                  (keydown.enter)="confirmRename(person, $event)"
+                  (keydown.escape)="cancelRename()"
+                  (blur)="cancelRename()"
+                  (click)="$event.stopPropagation()" />
+              } @else {
+                <span class="person-name" title="Klik untuk rename" (click)="startRename(person, $event)">{{ person.name }}</span>
+              }
+              @if (person.status === 'unknown') {
+                <span class="unknown-dot"></span>
+              }
+            </div>
+            <div class="person-location">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                <path d="M6 1a3.5 3.5 0 00-3.5 3.5C2.5 7.5 6 11 6 11s3.5-3.5 3.5-6.5A3.5 3.5 0 006 1z" stroke="#6A7282" stroke-width="1.2"/>
+                <circle cx="6" cy="4.5" r="1" fill="#6A7282"/>
+              </svg>
+              <span>{{ person.lastCamera }}</span>
+            </div>
+          </div>
+          <div class="person-meta">
+            <span class="meta-time">{{ person.time }}</span>
+            <span class="meta-camera">{{ person.lastCamera }}</span>
+          </div>
+        </div>
+      }
+    </div>
+
+  </div>
+
+  <!-- ── Right: Person Detail ───────────────── -->
+  <div class="detail-panel">
+  @if (selectedPerson) {
+
+    <!-- Camera preview -->
+    <div class="camera-preview">
+      @if (previewUrl) {
+        <img class="camera-feed" [src]="previewUrl | authUrl" alt="snapshot" />
+      } @else {
+        <div class="camera-feed-offline">
+          <svg width="40" height="40" viewBox="0 0 48 48" fill="none" opacity="0.3">
+            <rect x="2" y="10" width="32" height="22" rx="3" stroke="white" stroke-width="2"/>
+            <path d="M34 19l12-6v22l-12-6V19z" stroke="white" stroke-width="2" stroke-linejoin="round"/>
+          </svg>
+          <span>Belum ada snapshot</span>
+        </div>
+      }
+      @if (!editMode) {
+        <div class="camera-overlay">
+          <div class="overlay-left">
+            <div class="overlay-name">{{ selectedPerson.name }}</div>
+            @if (selectedPerson.jabatan) {
+              <div class="overlay-jabatan">{{ selectedPerson.jabatan }}</div>
+            } @else {
+              <div class="overlay-jabatan overlay-jabatan--empty">Unknown</div>
+            }
+          </div>
+          <button class="ubah-nama-btn" (click)="openEdit()">UBAH NAMA</button>
+        </div>
+      } @else {
+        <div class="camera-overlay camera-overlay--edit">
+          <div class="edit-form">
+            <div class="edit-field">
+              <label class="edit-label">Nama</label>
+              <input
+                class="edit-input"
+                type="text"
+                placeholder="Masukkan nama..."
+                [value]="editName"
+                (input)="editName = $any($event.target).value" />
+            </div>
+            <div class="edit-field">
+              <label class="edit-label">Jabatan</label>
+              <input
+                class="edit-input"
+                type="text"
+                placeholder="Masukkan jabatan..."
+                [value]="editJabatan"
+                (input)="editJabatan = $any($event.target).value" />
+            </div>
+            <div class="edit-actions">
+              <button class="btn-batal" (click)="cancelEdit()">Batal</button>
+              <button class="btn-simpan" (click)="saveEdit()">Simpan</button>
+            </div>
+          </div>
+        </div>
+      }
+    </div>
+
+    <!-- Stat cards -->
+    <div class="stat-cards">
+      <div class="stat-card">
+        <div class="stat-label">LAST CAMERA</div>
+        <div class="stat-value">{{ selectedPerson.lastCamera }}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">FIRST SEEN</div>
+        <div class="stat-value">{{ selectedPerson.firstSeen }}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">LAST SEEN</div>
+        <div class="stat-value">{{ selectedPerson.lastSeen }}</div>
+      </div>
+    </div>
+
+    <!-- Movement history -->
+    <div class="movement-section">
+      <div class="movement-header">
+        <span class="movement-title">PERGERAKAN</span>
+        <span class="movement-date">{{ dateLabel }}</span>
+      </div>
+      <div class="movement-list">
+        @for (mv of selectedPerson.movements; track $index; let last = $last) {
+          <div class="movement-row">
+            <span class="mv-time">{{ mv.time }}</span>
+            <div class="mv-indicator">
+              <div [ngClass]="['mv-dot', mv.isCurrent ? 'mv-dot--active' : '']"></div>
+              @if (!last) {
+                <div class="mv-line"></div>
+              }
+            </div>
+            <div class="mv-info">
+              <div class="mv-location">{{ mv.location }}</div>
+              <div class="mv-detail">
+                {{ mv.floor }}{{ mv.note ? ' • ' + mv.note : '' }}{{ mv.track_id != null ? ' • track #' + mv.track_id : '' }}
+              </div>
+            </div>
+            <div class="mv-actions">
+              @if (mv.direction) {
+                <span [ngClass]="['mv-direction', mv.direction === 'IN' ? 'mv-direction--in' : 'mv-direction--out']">
+                  {{ mv.direction }}
+                </span>
+              }
+              <button
+                [ngClass]="['mv-lihat', previewMvIdx === $index ? 'mv-lihat--active' : (mv.snapshot_url ? '' : 'mv-lihat--dim')]"
+                (click)="viewSnapshot(mv, $index, $event)">
+                Lihat
+              </button>
+            </div>
+          </div>
+        }
+      </div>
+    </div>
+
+  } <!-- end @if selectedPerson -->
+  </div>
+</div>
+
+<!-- ── Occupancy table ────────────────────────── -->
+@if (occupancy.length > 0) {
+  <div class="occupancy-section">
+    <div class="occupancy-header-row">
+      <span class="occ-col occ-col--name">NAMA RUANGAN</span>
+      <span class="occ-col">LANTAI</span>
+      <span class="occ-col occ-col--count">JUMLAH ORANG</span>
+    </div>
+    @for (room of occupancy; track room.camera_id) {
+      <div class="occupancy-row">
+        <span class="occ-col occ-col--name occ-val--name">{{ room.room_name }}</span>
+        <span class="occ-col occ-val">{{ room.floor ?? '—' }}</span>
+        <span class="occ-col occ-col--count occ-val--count"
+              [ngClass]="room.current_occupancy > 0 ? 'occ-val--positive' : ''">
+          {{ room.current_occupancy }}
+        </span>
+      </div>
+    }
+  </div>
+}
+

@@ -1,0 +1,147 @@
+.topbar {
+  height: 64px;
+  background: #1E2939;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  border-bottom: 1px solid rgba(60, 74, 66, 0.1);
+  flex-shrink: 0;
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.icon-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+}
+
+.icon-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #364153;
+  border-radius: 8px;
+  padding: 8px 14px;
+  width: 240px;
+}
+
+.search-bar input {
+  background: none;
+  border: none;
+  outline: none;
+  color: #D1D5DC;
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  width: 100%;
+}
+
+.search-bar input::placeholder {
+  color: #6A7282;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.nav-action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 8px 14px;
+  border-radius: 8px;
+  color: #D1D5DC;
+  font-family: 'Inter', sans-serif;
+  font-size: 10px;
+}
+
+.nav-action:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.admin-info {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-radius: 8px;
+  margin-left: 8px;
+}
+
+.admin-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  background: #1E2939;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  min-width: 120px;
+  padding: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  z-index: 20;
+}
+
+.admin-menu-item {
+  width: 100%;
+  background: none;
+  border: none;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 6px;
+  color: #E7000B;
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.admin-menu-item:hover {
+  background: rgba(255,255,255,0.06);
+}
+
+.admin-info:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.avatar {
+  width: 32px;
+  height: 32px;
+  background: #364153;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #D1D5DC;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: 'Inter', sans-serif;
+}
+
+.admin-name {
+  color: #FFFFFF;
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+}
