@@ -1,130 +1,437 @@
 <div class="page">
 
   <!-- ── Daftar Zona ───────────────────────────────────────────── -->
-  <div class="card zone-card">
-    <div class="zone-top">
+  <div class="card">
+    <div class="card-header">
       <div>
-        <h2 class="card-title">Konfigurasi Zona Deteksi</h2>
-        <p class="card-sub">Gambar garis masuk untuk menghitung okupansi ruangan secara real-time.</p>
+        <h2 class="card-title">Zona</h2>
+        <p class="card-sub">Kelola area deteksi okupansi — garis atau polygon</p>
       </div>
-      <div class="cam-select-group">
-        <label class="select-label">PILIH KAMERA</label>
-        <div class="select-wrap">
-          <select class="cam-select" (change)="onSelectChange($event)">
-            <option value="" disabled [selected]="!selectedCamera">Pilih kamera...</option>
-            @for (cam of cameras; track cam.id) {
-              <option [value]="cam.id" [selected]="selectedCamera?.id === cam.id">
-                {{ cam.camera_id ?? cam.name }}
-              </option>
+      <button class="btn-primary" (click)="openCreateModal()">+ Buat Zona</button>
+    </div>
+
+    <div class="table-filters">
+      <div class="search-wrap">
+        <svg class="search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none">
+          <circle cx="11" cy="11" r="7" stroke="#6A7282" stroke-width="2"/>
+          <path d="M21 21l-4.35-4.35" stroke="#6A7282" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <input class="search-input" type="text" placeholder="Cari nama zona..."
+          [value]="searchQuery" (input)="onSearchInput($event)" />
+      </div>
+      <div class="select-wrap select-wrap--sm">
+        <select class="table-filter-select" [value]="typeFilter" (change)="onTypeFilterChange($event)">
+          <option value="semua">Semua Tipe</option>
+          <option value="line">Line</option>
+          <option value="polygon">Polygon</option>
+        </select>
+        <svg class="select-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <path d="M3 5l4 4 4-4" stroke="#6A7282" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="select-wrap select-wrap--sm">
+        <select class="table-filter-select" [value]="cameraFilter" (change)="onCameraFilterChange($event)">
+          <option value="semua">Semua Kamera</option>
+          @for (cam of cameras; track cam.id) {
+            @if (cam.camera_id) {
+              <option [value]="cam.camera_id">{{ cam.name }}</option>
             }
-          </select>
-          <svg class="select-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none">
-            <path d="M3 5l4 4 4-4" stroke="#6A7282" stroke-width="1.5" stroke-linecap="round"/>
-          </svg>
-        </div>
+          }
+        </select>
+        <svg class="select-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <path d="M3 5l4 4 4-4" stroke="#6A7282" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
       </div>
     </div>
 
-    <div class="zone-body">
-      <!-- Snapshot + canvas -->
-      <div class="snapshot-wrap">
-        @if (!selectedCamera) {
-          <div class="snap-placeholder">Pilih kamera untuk melihat snapshot</div>
-        } @else if (snapshotError) {
-          <div class="snap-placeholder snap-placeholder--err">
-            <svg width="36" height="36" viewBox="0 0 48 48" fill="none" opacity="0.4">
-              <rect x="2" y="10" width="32" height="22" rx="3" stroke="white" stroke-width="2"/>
-              <path d="M34 19l12-6v22l-12-6V19z" stroke="white" stroke-width="2" stroke-linejoin="round"/>
-            </svg>
-            <span>Stream belum berjalan atau kamera tidak ditemukan</span>
-            <button class="btn-ghost" (click)="refreshSnapshot()">Coba Lagi</button>
+    <div class="zone-grid">
+      @for (zone of filteredZones; track zone.id) {
+        <div class="zone-card">
+          <div class="zone-card-top">
+            <span class="zone-card-name">{{ zone.name }}</span>
+            <div class="type-badges">
+              @for (t of zone.types; track t) {
+                <span [ngClass]="['type-badge', t === 'polygon' ? 'type-badge--polygon' : '']">
+                  {{ t === 'polygon' ? 'Polygon' : 'Line' }}
+                </span>
+              }
+            </div>
           </div>
-        } @else {
-          <div class="snap-inner">
-            <img
-              #snapshotImg
-              class="snap-img"
-              [src]="snapshotUrl | authUrl"
-              (load)="onSnapshotLoad()"
-              (error)="onSnapshotError()"
-              alt="snapshot" />
-            <canvas
-              #zoneCanvas
-              class="snap-canvas"
-              (click)="onCanvasClick($event)">
-            </canvas>
-            <div class="snap-hint">Klik 2 titik untuk menggambar garis crossing</div>
+          <div class="zone-card-occ">
+            <span class="zone-occ-count">{{ occupancyOf(zone.id)?.current_occupancy ?? 0 }}</span>
+            <span class="zone-occ-label">orang{{ zone.max_capacity ? ' / ' + zone.max_capacity + ' maks' : '' }}</span>
           </div>
-        }
-
-        <div class="snap-actions">
-          <button
-            class="btn-action"
-            [disabled]="!pendingLine"
-            (click)="addZone()">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-              <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            </svg>
-            Add Zone
-          </button>
-          <button
-            class="btn-action"
-            [disabled]="!pendingLine"
-            (click)="flipInSign()"
-            title="Balik arah IN/OUT">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-              <path d="M7 16V4m0 0L3 8m4-4l4 4M17 8v12m0 0l4-4m-4 4l-4-4"
-                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-            Flip IN/OUT
-          </button>
-          <button class="btn-action" (click)="clearZone()">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-              <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            </svg>
-            Clear Zone
-          </button>
-          @if (savedLines.length > 0) {
-            <button class="btn-action btn-action--danger" (click)="deleteAllLines()">
-              Hapus Semua Garis
-            </button>
-          }
-        </div>
-
-        <!-- Legend saved lines -->
-        @if (savedLines.length > 0) {
-          <div class="line-legend">
-            @for (line of savedLines; track line.id; let i = $index) {
-              <span class="legend-item">
-                <span class="legend-dot" [style.background]="lineColor(i)"></span>
-                Garis {{ i + 1 }}
-              </span>
+          <div class="zone-card-cams">
+            @for (cid of zone.camera_ids; track cid) {
+              <span class="cam-chip">{{ cid }}</span>
+            } @empty {
+              <span class="cam-chip cam-chip--empty">Belum ada kamera</span>
             }
           </div>
-        }
-      </div>
-
-      <!-- Detail Zona panel -->
-      @if (showZoneForm) {
-        <div class="zone-detail">
-          <div class="zone-detail-title">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-              <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-              <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-            </svg>
-            Detail Zona
+          <div class="zone-card-actions">
+            <button class="btn-action" (click)="openViewModal(zone, $event)">View</button>
+            <button class="btn-action" (click)="openConfigModal(zone, $event)">Konfigurasi</button>
           </div>
-          <label class="field-label">NAMA RUANGAN</label>
-          <input
-            class="field-input"
-            type="text"
-            placeholder="Contoh: Area Lift"
-            [value]="roomName"
-            (input)="roomName = $any($event.target).value" />
-          <button class="btn-save" (click)="saveZone()">Simpan</button>
+        </div>
+      } @empty {
+        <div class="td-empty">
+          {{ zones.length === 0 ? 'Belum ada zona. Klik "+ Buat Zona" untuk menambahkan.' : 'Tidak ada zona yang cocok dengan pencarian/filter.' }}
         </div>
       }
     </div>
   </div>
 
 </div>
+
+<!-- ── Modal Buat Zona ──────────────────────────────────────────── -->
+@if (showCreateModal) {
+  <div class="modal-overlay" (click)="closeCreateModal()">
+    <div class="modal" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <span>Buat Zona</span>
+        <button class="modal-close" (click)="closeCreateModal()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <label class="field-label">NAMA ZONA</label>
+        <input class="field-input" type="text" placeholder="Lobby Utama"
+          [value]="createName" (input)="createName = $any($event.target).value" />
+
+        <label class="field-label">KAPASITAS MAKS (opsional)</label>
+        <input class="field-input" type="number" placeholder="30"
+          [value]="createCapacity ?? ''" (input)="createCapacity = $any($event.target).value ? +$any($event.target).value : null" />
+
+        <label class="field-label">SUMBER KAMERA PERTAMA</label>
+        <div class="select-wrap">
+          <select class="cam-select" (change)="onCreateCameraChange($event)">
+            @for (cam of cameras; track cam.id) {
+              @if (cam.camera_id) {
+                <option [value]="cam.camera_id" [selected]="cam.camera_id === createCameraId">{{ cam.name }}</option>
+              }
+            }
+          </select>
+          <svg class="select-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M3 5l4 4 4-4" stroke="#6A7282" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <p class="field-hint">Zona harus punya minimal 1 sumber kamera. Tipe garis/polygon ditentukan pas gambar di langkah berikutnya.</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-ghost" (click)="closeCreateModal()">Batal</button>
+        <button class="btn-primary" [disabled]="!createName.trim() || !createCameraId" (click)="proceedToCreateDrawing()">Lanjut ke Gambar</button>
+      </div>
+    </div>
+  </div>
+}
+
+<!-- ── Modal View ───────────────────────────────────────────────── -->
+@if (showViewModal && viewZone) {
+  <div class="modal-overlay" (click)="closeViewModal()">
+    <div class="modal modal--wide" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <span>{{ viewZone.name }}</span>
+        <button class="modal-close" (click)="closeViewModal()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body modal-body--scroll">
+
+        <!-- Summary -->
+        <div class="view-summary">
+          <div class="summary-stat">
+            <span class="summary-value">{{ occupancyOf(viewZone.id)?.current_occupancy ?? 0 }}</span>
+            <span class="summary-label">Okupansi saat ini</span>
+          </div>
+          <div class="summary-stat">
+            <span class="summary-value">{{ occupancyOf(viewZone.id)?.count_in ?? 0 }}</span>
+            <span class="summary-label">Masuk hari ini</span>
+          </div>
+          <div class="summary-stat">
+            <span class="summary-value">{{ occupancyOf(viewZone.id)?.count_out ?? 0 }}</span>
+            <span class="summary-label">Keluar hari ini</span>
+          </div>
+          <div class="summary-stat">
+            <span class="summary-value">{{ viewZone.max_capacity ?? '—' }}</span>
+            <span class="summary-label">Kapasitas maks</span>
+          </div>
+        </div>
+
+        <!-- Per-camera snapshot + overlay zona -->
+        <div class="view-section-title">Kamera Pemantau</div>
+        <div class="view-cams">
+          @for (cam of viewZone.cameras; track cam.id; let i = $index) {
+            <div class="view-cam-card">
+              <div class="view-cam-name">{{ cam.camera_name }}</div>
+              <div class="snap-inner snap-inner--sm">
+                <img #viewSnapImg class="snap-img"
+                  [src]="(cam.camera_str_id ? viewCamSnapshotUrls[cam.camera_str_id] : '') | authUrl"
+                  (load)="onViewSnapshotLoad(i)"
+                  alt="snapshot" />
+                <canvas [id]="'view-overlay-' + i" class="snap-canvas snap-canvas--readonly"></canvas>
+              </div>
+            </div>
+          } @empty {
+            <div class="list-empty">Belum ada kamera terpasang di zona ini.</div>
+          }
+        </div>
+
+        <!-- Range selector -->
+        <div class="view-section-title">History Okupansi</div>
+        <div class="range-bar">
+          <button [ngClass]="['range-btn', rangeMode === 'today' ? 'range-btn--active' : '']" (click)="setRangeMode('today')">Today</button>
+          <button [ngClass]="['range-btn', rangeMode === '7days' ? 'range-btn--active' : '']" (click)="setRangeMode('7days')">7 Days</button>
+          <button [ngClass]="['range-btn', rangeMode === 'custom' ? 'range-btn--active' : '']" (click)="setRangeMode('custom')">Custom</button>
+          @if (rangeMode === 'custom') {
+            <input type="date" class="date-input" [value]="customFrom" (change)="onCustomFromChange($event)" />
+            <span class="range-sep">—</span>
+            <input type="date" class="date-input" [value]="customTo" (change)="onCustomToChange($event)" />
+          }
+        </div>
+
+        <!-- History chart (inline SVG bar chart) -->
+        <div class="chart-wrap">
+          @if (historyPoints.length === 0) {
+            <div class="list-empty">Belum ada data pada rentang ini.</div>
+          } @else {
+            <svg class="chart-svg" [attr.viewBox]="'0 0 ' + (historyPoints.length * 60) + ' 160'" preserveAspectRatio="none">
+              @for (p of historyPoints; track p.date; let i = $index) {
+                <rect [attr.x]="i * 60 + 10" [attr.y]="140 - (p.count_in / historyMax * 120)"
+                      width="16" [attr.height]="p.count_in / historyMax * 120" fill="#22c55e" rx="2"/>
+                <rect [attr.x]="i * 60 + 30" [attr.y]="140 - (p.count_out / historyMax * 120)"
+                      width="16" [attr.height]="p.count_out / historyMax * 120" fill="#E7000B" rx="2"/>
+                <text [attr.x]="i * 60 + 28" y="155" text-anchor="middle" class="chart-label">{{ p.date.slice(5) }}</text>
+              }
+            </svg>
+            <div class="chart-legend">
+              <span class="legend-item"><span class="legend-dot" style="background:#22c55e"></span>Masuk</span>
+              <span class="legend-item"><span class="legend-dot" style="background:#E7000B"></span>Keluar</span>
+            </div>
+          }
+        </div>
+
+        <!-- Heatmap -->
+        <div class="view-section-title">
+          Heatmap
+          @if (viewZone.cameras.length > 1) {
+            <div class="select-wrap select-wrap--sm heatmap-cam-select">
+              <select class="table-filter-select" (change)="onHeatmapCameraChange($event)">
+                @for (cam of viewZone.cameras; track cam.id) {
+                  <option [value]="cam.camera_str_id" [selected]="cam.camera_str_id === heatmapCameraId">{{ cam.camera_name }}</option>
+                }
+              </select>
+            </div>
+          }
+        </div>
+        <div class="heatmap-wrap">
+          @if (!heatmapCameraId) {
+            <div class="list-empty">Belum ada kamera untuk heatmap.</div>
+          } @else {
+            <div class="snap-inner">
+              <img class="snap-img" [src]="heatmapSnapshotUrl | authUrl" alt="heatmap base" />
+              @if (heatmap) {
+                <div class="heatmap-grid" [style.gridTemplateColumns]="'repeat(' + heatmap.grid_size + ', 1fr)'">
+                  @for (row of heatmap.cells; track $index) {
+                    @for (count of row; track $index) {
+                      <div class="heatmap-cell" [style.opacity]="heatmapOpacity(count)"></div>
+                    }
+                  }
+                </div>
+              }
+            </div>
+          }
+        </div>
+
+        <!-- Event history / evidence -->
+        <div class="view-section-title">Riwayat Kejadian</div>
+        <table class="event-table">
+          <thead>
+            <tr>
+              <th>PREVIEW</th>
+              <th>ARAH</th>
+              <th>WAKTU</th>
+              <th>KAMERA</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (ev of events; track ev.id) {
+              <tr>
+                <td class="td-evidence">
+                  @if (ev.snapshot_url) {
+                    <img class="evidence-thumb" [src]="ev.snapshot_url | authUrl" alt="bukti" />
+                  } @else {
+                    <span class="evidence-none">—</span>
+                  }
+                </td>
+                <td>
+                  <span [ngClass]="['dir-badge', ev.direction === 'IN' ? 'dir-badge--in' : 'dir-badge--out']">{{ ev.direction }}</span>
+                </td>
+                <td class="td-muted">{{ ev.timestamp | slice:0:19 }}</td>
+                <td class="td-muted">{{ ev.camera_name ?? ev.camera_id }}</td>
+              </tr>
+            } @empty {
+              <tr><td colspan="4" class="td-empty">Belum ada kejadian pada rentang ini.</td></tr>
+            }
+          </tbody>
+        </table>
+        @if (eventsPages > 1) {
+          <div class="pagination">
+            @for (p of eventsPageNumbers; track p) {
+              <button [ngClass]="['page-btn', eventsPage === p ? 'page-btn--active' : '']"
+                (click)="loadEventsPage(p)">{{ p }}</button>
+            }
+          </div>
+        }
+
+      </div>
+    </div>
+  </div>
+}
+
+<!-- ── Modal Konfigurasi ────────────────────────────────────────── -->
+@if (showConfigModal && configZone && !drawingCamera) {
+  <div class="modal-overlay" (click)="closeConfigModal()">
+    <div class="modal modal--wide" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <span>Konfigurasi — {{ configZone.name }}</span>
+        <button class="modal-close" (click)="closeConfigModal()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body modal-body--scroll">
+
+        <label class="field-label">NAMA ZONA</label>
+        <input class="field-input" type="text"
+          [value]="configName" (input)="configName = $any($event.target).value" />
+
+        <label class="field-label">KAPASITAS MAKS</label>
+        <input class="field-input" type="number"
+          [value]="configCapacity ?? ''" (input)="configCapacity = $any($event.target).value ? +$any($event.target).value : null" />
+
+        <label class="field-label">KAMERA PEMANTAU</label>
+        <div class="config-cam-list">
+          @for (cam of configZone.cameras; track cam.id) {
+            <div class="config-cam-row">
+              <span class="config-cam-name">{{ cam.camera_name }}
+                <span [ngClass]="['type-badge', cam.type === 'polygon' ? 'type-badge--polygon' : '']">{{ cam.type === 'polygon' ? 'Polygon' : 'Line' }}</span>
+              </span>
+              <div class="config-cam-actions">
+                <button class="btn-ghost btn-ghost--sm" (click)="startDrawingCamera(cam, $event)">Edit Geometri</button>
+                <button class="icon-btn icon-btn--danger" title="Lepas dari zona" (click)="removeCameraFromZone(cam, $event)">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                    <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          } @empty {
+            <div class="list-empty">Belum ada kamera.</div>
+          }
+        </div>
+
+        @if (availableCamerasToAdd.length > 0) {
+          <div class="add-cam-row">
+            <div class="select-wrap">
+              <select class="cam-select" (change)="onConfigAddCameraChange($event)">
+                <option value="">Pilih kamera untuk ditambahkan...</option>
+                @for (cam of availableCamerasToAdd; track cam.id) {
+                  <option [value]="cam.camera_id">{{ cam.name }}</option>
+                }
+              </select>
+              <svg class="select-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M3 5l4 4 4-4" stroke="#6A7282" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+            </div>
+            <button class="btn-action" [disabled]="!configAddCameraId" (click)="addCameraToZone()">+ Tambah &amp; Gambar</button>
+          </div>
+        }
+
+        <button class="btn-delete" (click)="deleteZone()">Hapus Zona</button>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-ghost" (click)="closeConfigModal()">Tutup</button>
+        <button class="btn-primary" (click)="saveZoneMeta()">Simpan</button>
+      </div>
+    </div>
+  </div>
+}
+
+<!-- ── Modal Gambar Geometri (dipakai saat buat zona baru & tambah/edit kamera) ── -->
+@if (drawingCamera) {
+  <div class="modal-overlay" (click)="cancelDrawing()">
+    <div class="modal modal--wide" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <span>Gambar untuk: {{ drawingCamera.camera_name }}</span>
+        <button class="modal-close" (click)="cancelDrawing()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body modal-body--scroll">
+
+        <label class="field-label">TIPE GAMBAR</label>
+        <div class="type-toggle">
+          <button type="button" [ngClass]="['type-opt', drawingType === 'line' ? 'type-opt--active' : '']"
+            (click)="setDrawingType('line')">Line</button>
+          <button type="button" [ngClass]="['type-opt', drawingType === 'polygon' ? 'type-opt--active' : '']"
+            (click)="setDrawingType('polygon')">Polygon</button>
+        </div>
+
+        @if (drawingSnapshotError) {
+          <div class="snap-placeholder snap-placeholder--err">
+            <span>Stream belum berjalan atau kamera tidak ditemukan</span>
+            <button class="btn-ghost" (click)="refreshDrawingSnapshot()">Coba Lagi</button>
+          </div>
+        } @else {
+          <div class="snap-inner">
+            <img #configSnapImg class="snap-img"
+              [src]="drawingSnapshotUrl | authUrl"
+              (load)="onDrawingSnapshotLoad()"
+              (error)="onDrawingSnapshotError()"
+              alt="snapshot" />
+            <canvas #configCanvas class="snap-canvas" (click)="onConfigCanvasClick($event)"></canvas>
+            <div class="snap-hint">
+              {{ drawingType === 'polygon' ? 'Klik buat nambah titik polygon' : 'Klik 2 titik = 1 garis' }}
+            </div>
+          </div>
+        }
+
+        @if (drawingType === 'line') {
+          <div class="segment-list">
+            @for (seg of savedSegments; track $index) {
+              <div class="segment-row">
+                <span>Garis {{ $index + 1 }}</span>
+                <button class="btn-action" (click)="flipSegmentSign($index)">Flip IN/OUT</button>
+                <button class="icon-btn icon-btn--danger" (click)="removeSegment($index)">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                    <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                  </svg>
+                </button>
+              </div>
+            } @empty {
+              <div class="list-empty">Belum ada garis. Klik 2 titik di gambar.</div>
+            }
+          </div>
+        } @else {
+          <div class="segment-list">
+            <span class="segment-row">{{ polygonPoints.length }} titik polygon</span>
+            <button class="btn-action" [disabled]="polygonPoints.length === 0" (click)="undoLastPolygonPoint()">Undo Titik Terakhir</button>
+            <button class="btn-action" [disabled]="polygonPoints.length === 0" (click)="clearPolygon()">Reset</button>
+          </div>
+        }
+
+      </div>
+      <div class="modal-footer">
+        <button class="btn-ghost" (click)="cancelDrawing()">Batal</button>
+        <button class="btn-primary" (click)="saveDrawing()">Simpan Geometri</button>
+      </div>
+    </div>
+  </div>
+}

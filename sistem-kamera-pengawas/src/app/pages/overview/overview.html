@@ -72,9 +72,9 @@
     <div class="card">
       <div class="card__header">Ruangan</div>
       <div class="room-list">
-        @for (room of topOccupancy; track room.camera_id) {
+        @for (room of topOccupancy; track room.zone_id) {
           <div class="room-row">
-            <span class="room-name">{{ room.room_name }}</span>
+            <span class="room-name">{{ room.zone_name }}</span>
             <span [ngClass]="['room-count', room.current_occupancy > 0 ? 'room-count--active' : '']">
               {{ room.current_occupancy }} Orang
             </span>

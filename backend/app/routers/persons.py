@@ -65,21 +65,30 @@ async def get_movements(
         from zoneinfo import ZoneInfo
         date_filter = datetime.now(ZoneInfo("Asia/Jakarta")).date()
 
-    # Detections — deduplicated consecutive same-camera runs, no crossing data mixed in
+    # Detections — deduplicated consecutive same-camera runs, no crossing data mixed in.
+    # Zona kamera diambil dari zona PERTAMA (by id) yang memantau kamera ini, kalau ada
+    # lebih dari satu — passive detection gak tau lagi di zona spesifik yang mana.
     det_rows = await pool.fetch(
         """
         SELECT
             d.camera_id,
             d.timestamp,
             c.name                       AS cam_name,
-            cz.room_name,
-            COALESCE(cz.floor, c.floor)  AS db_floor,
-            cz.camera_id IS NOT NULL     AS has_zone,
+            z.name                       AS room_name,
+            c.floor                      AS db_floor,
+            (z.id IS NOT NULL)           AS has_zone,
             d.thumbnail_url              AS snapshot_url,
             d.track_id
         FROM detections d
-        LEFT JOIN camera_zones cz ON cz.camera_id = d.camera_id
-        LEFT JOIN cameras c       ON c.camera_id  = d.camera_id
+        LEFT JOIN cameras c ON c.camera_id = d.camera_id
+        LEFT JOIN LATERAL (
+            SELECT zn.id, zn.name
+            FROM zone_cameras zc2
+            JOIN zones zn ON zn.id = zc2.zone_id
+            WHERE zc2.camera_id = c.id
+            ORDER BY zn.id
+            LIMIT 1
+        ) z ON true
         WHERE d.person_id = $1
           AND (d.timestamp AT TIME ZONE 'Asia/Jakarta')::date = $2
         ORDER BY d.timestamp DESC
@@ -89,24 +98,25 @@ async def get_movements(
         date_filter,
     )
 
-    # Crossing events — each is always its own row
+    # Crossing events — zona diketahui persis lewat zone_camera_id, gak perlu tebak
     cross_rows = await pool.fetch(
         """
         SELECT
             oe.camera_id,
             oe.timestamp,
             c.name                       AS cam_name,
-            cz.room_name,
-            COALESCE(cz.floor, c.floor)  AS db_floor,
-            cz.camera_id IS NOT NULL     AS has_zone,
+            z.name                       AS room_name,
+            c.floor                      AS db_floor,
+            (z.id IS NOT NULL)           AS has_zone,
             oe.direction,
             oe.event_kind,
             oe.snapshot_url,
             oe.track_id
         FROM occupancy_events oe
-        JOIN persons p        ON p.label     = oe.person_label
-        LEFT JOIN camera_zones cz ON cz.camera_id = oe.camera_id
-        LEFT JOIN cameras c       ON c.camera_id  = oe.camera_id
+        JOIN persons p              ON p.label     = oe.person_label
+        LEFT JOIN zone_cameras zc   ON zc.id        = oe.zone_camera_id
+        LEFT JOIN zones z           ON z.id         = zc.zone_id
+        LEFT JOIN cameras c         ON c.camera_id  = oe.camera_id
         WHERE p.id = $1
           AND (oe.timestamp AT TIME ZONE 'Asia/Jakarta')::date = $2
         ORDER BY oe.timestamp DESC

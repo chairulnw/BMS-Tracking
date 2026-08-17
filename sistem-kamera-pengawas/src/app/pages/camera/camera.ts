@@ -1,172 +1,267 @@
-import { Component, DestroyRef, inject, OnInit } from '@angular/core';
-import { DecimalPipe, NgClass } from '@angular/common';
+import { Component, OnInit } from '@angular/core';
+import { NgClass } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
-import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { interval } from 'rxjs';
-import { startWith, switchMap } from 'rxjs/operators';
+import { forkJoin } from 'rxjs';
+import { AuthUrlPipe } from '../../pipes/auth-url.pipe';
 
 const API = 'http://localhost:8002';
-const AI  = 'http://localhost:8001';
 
 interface Camera {
-  id:            number;
-  camera_id:     string | null;
-  name:          string;
-  zone_location: string | null;
-  floor:         string | null;
-  rtsp_url:      string;
-  is_active:     boolean;
+  id:                 number;
+  camera_id:          string | null;
+  name:               string;
+  location:           string | null;
+  group_id:           number | null;
+  group_name:         string | null;
+  rtsp_url:           string;
+  is_active:          boolean;
+  analytics_enabled:  boolean;
+  zone_count:         number;
+}
+
+interface CameraGroup {
+  id:   number;
+  name: string;
+}
+
+interface GroupSection {
+  key:      string;           // 'g{id}' atau 'none'
+  group:    CameraGroup | null;
+  cameras:  Camera[];
 }
 
 @Component({
   selector: 'app-camera',
   standalone: true,
-  imports: [NgClass, DecimalPipe],
+  imports: [NgClass, AuthUrlPipe],
   templateUrl: './camera.html',
   styleUrl: './camera.css',
 })
 export class CameraPage implements OnInit {
-  cameras: Camera[] = [];
+  cameras: Camera[]      = [];
+  groups:  CameraGroup[] = [];
 
-  // Camera modal
-  showModal       = false;
-  editingCamera: Camera | null = null;
-  formName        = '';
-  formFloor       = '';
-  formRtspUrl     = '';
-  formIsActive    = true;
+  // Search & filters
+  searchQuery:      string = '';
+  groupFilter:      string = 'semua';   // 'semua' | 'none' | '<group_id>'
+  streamFilter:     'semua' | 'aktif' | 'nonaktif' = 'semua';
+  analyticsFilter:  'semua' | 'aktif' | 'nonaktif' = 'semua';
 
-  // RTSP show/hide per row
-  visibleRtsp = new Set<number>();
+  // Multi-select + bulk grouping
+  selectMode = false;
+  selectedIds = new Set<number>();
 
-  // Camera table filters
-  floorFilter:  string = 'semua';
-  statusFilter: 'semua' | 'aktif' | 'nonaktif' = 'semua';
+  // Row-click preview popover
+  previewCamera: Camera | null = null;
+  previewUrl     = '';
+  previewPos     = { x: 0, y: 0 };
+  collapsedGroups = new Set<string>();
+  showBulkGroupPicker = false;
+  bulkTargetGroupId: number | 'new' | '' = '';
+  bulkNewGroupName  = '';
 
-  // Stream state
-  streamRunning   = false;
-  streamLoading   = false;
-  framesProcessed = 0;
-
-  private destroyRef = inject(DestroyRef);
+  // Camera modal (add & edit)
+  showModal        = false;
+  editingCamera:    Camera | null = null;
+  formLocation      = '';
+  formGroupId: number | '' = '';
+  formRtspUrl       = '';
+  formIsActive      = true;
+  formAnalyticsEnabled = true;
 
   constructor(private http: HttpClient) {}
 
   ngOnInit(): void {
-    this.loadCameras();
-    this._pollStreamStatus();
+    this.loadAll();
   }
 
-  private _pollStreamStatus(): void {
-    interval(3000).pipe(
-      startWith(0),
-      switchMap(() => this.http.get<{ running: boolean; frames_processed: number }>(
-        `${AI}/stream/status`
-      )),
-      takeUntilDestroyed(this.destroyRef),
-    ).subscribe({
-      next: s => {
-        this.streamRunning   = s.running;
-        this.framesProcessed = s.frames_processed;
+  // ── Load ─────────────────────────────────────────────────────────────────
+
+  loadAll(): void {
+    forkJoin({
+      cameras: this.http.get<Camera[]>(`${API}/cameras`),
+      groups:  this.http.get<CameraGroup[]>(`${API}/camera-groups`),
+    }).subscribe({
+      next: ({ cameras, groups }) => {
+        this.cameras = cameras;
+        this.groups  = groups;
+        this.selectedIds.clear();
       },
-      error: () => { this.streamRunning = false; },
+      error: err => console.error('[camera] load error:', err),
     });
   }
 
-  startStream(): void {
-    if (this.streamLoading) return;
-    this.streamLoading = true;
-    this.http.post(`${AI}/stream/start`, {}).subscribe({
-      next: () => { this.streamRunning = true;  this.streamLoading = false; },
-      error: ()=> { this.streamLoading = false; },
-    });
+  // ── Search & filter ──────────────────────────────────────────────────────
+
+  onSearchInput(event: Event): void {
+    this.searchQuery = (event.target as HTMLInputElement).value;
   }
 
-  stopStream(): void {
-    if (this.streamLoading) return;
-    this.streamLoading = true;
-    this.http.post(`${AI}/stream/stop`, {}).subscribe({
-      next: () => { this.streamRunning = false; this.streamLoading = false; },
-      error: ()=> { this.streamLoading = false; },
-    });
+  onGroupFilterChange(event: Event): void {
+    this.groupFilter = (event.target as HTMLSelectElement).value;
   }
 
-  loadCameras(): void {
-    this.http.get<Camera[]>(`${API}/cameras`).subscribe({
-      next:  cams => { this.cameras = cams; },
-      error: err => console.error('[camera] load cameras error:', err),
-    });
+  onStreamFilterChange(event: Event): void {
+    this.streamFilter = (event.target as HTMLSelectElement).value as 'semua' | 'aktif' | 'nonaktif';
   }
 
-  get floors(): string[] {
-    const set = new Set(this.cameras.map(c => c.floor).filter((f): f is string => !!f));
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  onAnalyticsFilterChange(event: Event): void {
+    this.analyticsFilter = (event.target as HTMLSelectElement).value as 'semua' | 'aktif' | 'nonaktif';
   }
 
   get filteredCameras(): Camera[] {
+    const q = this.searchQuery.trim().toLowerCase();
     return this.cameras.filter(c => {
-      const matchFloor  = this.floorFilter === 'semua' || c.floor === this.floorFilter;
-      const matchStatus =
-        this.statusFilter === 'semua' ||
-        (this.statusFilter === 'aktif'    && c.is_active) ||
-        (this.statusFilter === 'nonaktif' && !c.is_active);
-      return matchFloor && matchStatus;
+      const matchSearch = !q
+        || c.name.toLowerCase().includes(q)
+        || (c.location ?? '').toLowerCase().includes(q);
+      const matchGroup =
+        this.groupFilter === 'semua' ||
+        (this.groupFilter === 'none' && c.group_id === null) ||
+        (c.group_id !== null && String(c.group_id) === this.groupFilter);
+      const matchStream =
+        this.streamFilter === 'semua' ||
+        (this.streamFilter === 'aktif'    && c.is_active) ||
+        (this.streamFilter === 'nonaktif' && !c.is_active);
+      const matchAnalytics =
+        this.analyticsFilter === 'semua' ||
+        (this.analyticsFilter === 'aktif'    && c.analytics_enabled) ||
+        (this.analyticsFilter === 'nonaktif' && !c.analytics_enabled);
+      return matchSearch && matchGroup && matchStream && matchAnalytics;
     });
   }
 
-  onFloorFilterChange(event: Event): void {
-    this.floorFilter = (event.target as HTMLSelectElement).value;
+  get groupedSections(): GroupSection[] {
+    const list = this.filteredCameras;
+    const sections: GroupSection[] = this.groups.map(g => ({
+      key: `g${g.id}`, group: g, cameras: list.filter(c => c.group_id === g.id),
+    }));
+    const ungrouped = list.filter(c => c.group_id === null);
+    sections.push({ key: 'none', group: null, cameras: ungrouped });
+    return sections.filter(s => s.cameras.length > 0);
   }
 
-  onStatusFilterChange(event: Event): void {
-    this.statusFilter = (event.target as HTMLSelectElement).value as 'semua' | 'aktif' | 'nonaktif';
+  toggleGroupCollapse(key: string): void {
+    if (this.collapsedGroups.has(key)) this.collapsedGroups.delete(key);
+    else this.collapsedGroups.add(key);
   }
 
-  toggleCamera(cam: Camera, event: Event): void {
+  isGroupCollapsed(key: string): boolean {
+    return this.collapsedGroups.has(key);
+  }
+
+  // ── Multi-select + bulk group assign ────────────────────────────────────
+
+  isSelected(id: number): boolean {
+    return this.selectedIds.has(id);
+  }
+
+  toggleSelect(id: number, event: Event): void {
     event.stopPropagation();
-    this.http.patch<Camera>(`${API}/cameras/${cam.id}/toggle`, {}).subscribe(updated => {
-      cam.is_active = updated.is_active;
-    });
+    if (this.selectedIds.has(id)) this.selectedIds.delete(id);
+    else this.selectedIds.add(id);
   }
 
-  deleteCamera(cam: Camera, event: Event): void {
-    event.stopPropagation();
-    if (!confirm(`Hapus kamera "${cam.name}"?`)) return;
-    this.http.delete(`${API}/cameras/${cam.id}`).subscribe(() => {
-      this.cameras = this.cameras.filter(c => c.id !== cam.id);
-    });
+  clearSelection(): void {
+    this.selectedIds.clear();
+    this.showBulkGroupPicker = false;
   }
+
+  toggleSelectMode(): void {
+    this.selectMode = !this.selectMode;
+    if (!this.selectMode) this.clearSelection();
+  }
+
+  openBulkGroupPicker(): void {
+    this.bulkTargetGroupId = '';
+    this.bulkNewGroupName  = '';
+    this.showBulkGroupPicker = true;
+  }
+
+  onBulkTargetChange(event: Event): void {
+    const val = (event.target as HTMLSelectElement).value;
+    this.bulkTargetGroupId = val === 'new' ? 'new' : (val === '' ? '' : Number(val));
+  }
+
+  applyBulkGroup(): void {
+    const ids = Array.from(this.selectedIds);
+    if (ids.length === 0) return;
+
+    const assign = (groupId: number | null) => {
+      forkJoin(
+        ids.map(id => this.http.patch(`${API}/cameras/${id}/group`, { group_id: groupId }))
+      ).subscribe(() => {
+        this.showBulkGroupPicker = false;
+        this.clearSelection();
+        this.loadAll();
+      });
+    };
+
+    if (this.bulkTargetGroupId === 'new') {
+      const name = this.bulkNewGroupName.trim();
+      if (!name) return;
+      this.http.post<CameraGroup>(`${API}/camera-groups`, { name }).subscribe(g => assign(g.id));
+    } else if (this.bulkTargetGroupId === '') {
+      assign(null);   // "Tanpa Grup"
+    } else {
+      assign(this.bulkTargetGroupId);
+    }
+  }
+
+  deleteGroup(group: CameraGroup, event: Event): void {
+    event.stopPropagation();
+    if (!confirm(`Hapus grup "${group.name}"? Kamera di dalamnya akan jadi "Tanpa Grup".`)) return;
+    this.http.delete(`${API}/camera-groups/${group.id}`).subscribe(() => this.loadAll());
+  }
+
+  // ── Add / edit modal ─────────────────────────────────────────────────────
 
   openAddModal(): void {
-    this.editingCamera = null;
-    this.formName      = '';
-    this.formFloor     = '';
-    this.formRtspUrl   = '';
-    this.formIsActive  = true;
-    this.showModal     = true;
+    this.editingCamera        = null;
+    this.formLocation          = '';
+    this.formGroupId          = '';
+    this.formRtspUrl          = '';
+    this.formIsActive         = true;
+    this.formAnalyticsEnabled = true;
+    this.showModal            = true;
   }
 
   openEditModal(cam: Camera, event: Event): void {
     event.stopPropagation();
-    this.editingCamera = cam;
-    this.formName      = cam.name;
-    this.formFloor     = cam.floor ?? '';
-    this.formRtspUrl   = cam.rtsp_url;
-    this.formIsActive  = cam.is_active;
-    this.showModal     = true;
+    this.editingCamera        = cam;
+    this.formLocation          = cam.location ?? '';
+    this.formGroupId          = cam.group_id ?? '';
+    this.formRtspUrl          = cam.rtsp_url;
+    this.formIsActive         = cam.is_active;
+    this.formAnalyticsEnabled = cam.analytics_enabled;
+    this.showModal            = true;
+  }
+
+  closeModal(): void { this.showModal = false; }
+
+  // ── Row-click preview popover ────────────────────────────────────────────
+
+  openPreview(cam: Camera, event: MouseEvent): void {
+    event.stopPropagation();
+    this.previewCamera = cam;
+    this.previewUrl     = cam.camera_id
+      ? `${API}/cameras/${cam.camera_id}/snapshot?t=${Date.now()}`
+      : '';
+    this.previewPos     = { x: event.clientX, y: event.clientY };
+  }
+
+  closePreview(): void {
+    this.previewCamera = null;
   }
 
   saveCamera(): void {
-    const body: Record<string, unknown> = {
-      name:     this.formName.trim(),
-      floor:    this.formFloor.trim() || null,
-      rtsp_url: this.formRtspUrl.trim(),
+    const body = {
+      location:           this.formLocation.trim() || null,
+      group_id:           this.formGroupId === '' ? null : this.formGroupId,
+      rtsp_url:           this.formRtspUrl.trim(),
+      is_active:          this.formIsActive,
+      analytics_enabled:  this.formAnalyticsEnabled,
     };
-    if (!this.editingCamera) {
-      body['is_active'] = true;
-    } else {
-      body['is_active'] = this.editingCamera.is_active;
-    }
     const req = this.editingCamera
       ? this.http.put<Camera>(`${API}/cameras/${this.editingCamera.id}`, body)
       : this.http.post<Camera>(`${API}/cameras`, body);
@@ -174,7 +269,7 @@ export class CameraPage implements OnInit {
     req.subscribe({
       next: () => {
         this.showModal = false;
-        this.loadCameras();
+        this.loadAll();
       },
       error: (err) => {
         console.error('[camera] saveCamera error:', err);
@@ -183,31 +278,28 @@ export class CameraPage implements OnInit {
     });
   }
 
-  toggleRtspVisibility(id: number, event: Event): void {
-    event.stopPropagation();
-    if (this.visibleRtsp.has(id)) {
-      this.visibleRtsp.delete(id);
-    } else {
-      this.visibleRtsp.add(id);
-    }
+  deleteCameraFromModal(): void {
+    if (!this.editingCamera) return;
+    if (!confirm(`Hapus kamera "${this.editingCamera.name}"?`)) return;
+    this.http.delete(`${API}/cameras/${this.editingCamera.id}`).subscribe(() => {
+      this.showModal = false;
+      this.loadAll();
+    });
   }
 
-  maskedUrl(url: string): string {
-    try {
-      const u = new URL(url);
-      if (u.password) u.password = '••••••';
-      return u.toString();
-    } catch {
-      return url.replace(/:([^@]+)@/, ':••••••@');
-    }
+  toggleFormStream(): void {
+    this.formIsActive = !this.formIsActive;
+    if (!this.formIsActive) this.formAnalyticsEnabled = false;   // analitik butuh stream jalan
   }
 
-  closeModal(): void { this.showModal = false; }
-
-  formInput(field: 'name' | 'floor' | 'rtspUrl', event: Event): void {
+  formInput(field: 'location' | 'rtspUrl', event: Event): void {
     const val = (event.target as HTMLInputElement).value;
-    if (field === 'name')    this.formName    = val;
-    if (field === 'floor')   this.formFloor   = val;
-    if (field === 'rtspUrl') this.formRtspUrl = val;
+    if (field === 'location') this.formLocation = val;
+    if (field === 'rtspUrl')  this.formRtspUrl  = val;
+  }
+
+  onFormGroupChange(event: Event): void {
+    const val = (event.target as HTMLSelectElement).value;
+    this.formGroupId = val === '' ? '' : Number(val);
   }
 }

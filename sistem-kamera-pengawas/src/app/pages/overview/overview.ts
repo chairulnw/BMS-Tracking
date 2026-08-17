@@ -20,9 +20,8 @@ interface Stats {
 }
 
 interface OccupancyRoom {
-  camera_id:         string;
-  room_name:         string;
-  floor:             string | null;
+  zone_id:           number;
+  zone_name:         string;
   current_occupancy: number;
 }
 
@@ -140,12 +139,8 @@ export class Dashboard implements OnInit {
   }
 
   get roomSummary(): { total: number; occupied: number; empty: number } {
-    const byRoom = new Map<string, number>();
-    for (const r of this.occupancy) {
-      byRoom.set(r.room_name, (byRoom.get(r.room_name) ?? 0) + r.current_occupancy);
-    }
-    const total    = byRoom.size;
-    const occupied = [...byRoom.values()].filter(v => v > 0).length;
+    const total    = this.occupancy.length;
+    const occupied = this.occupancy.filter(r => r.current_occupancy > 0).length;
     return { total, occupied, empty: total - occupied };
   }
 

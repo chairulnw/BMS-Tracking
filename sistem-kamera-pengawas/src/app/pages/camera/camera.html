@@ -7,39 +7,34 @@
         <h2 class="card-title">Daftar Kamera</h2>
         <p class="card-sub">Kelola streaming dan penempatan kamera</p>
       </div>
-      <div class="stream-controls">
-        <div [ngClass]="['stream-status', streamRunning ? 'stream-status--on' : '']">
-          <span class="stream-dot"></span>
-          {{ streamRunning ? 'Stream Aktif' : 'Stream Berhenti' }}
-          @if (streamRunning && framesProcessed > 0) {
-            <span class="stream-frames">{{ framesProcessed | number }} frame</span>
-          }
-        </div>
-        @if (streamRunning) {
-          <button class="btn-stop" [disabled]="streamLoading" (click)="stopStream()">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-              <rect x="6" y="6" width="12" height="12" rx="2"/>
-            </svg>
-            {{ streamLoading ? 'Menghentikan...' : 'Hentikan Stream' }}
-          </button>
-        } @else {
-          <button class="btn-start" [disabled]="streamLoading || cameras.length === 0" (click)="startStream()">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-              <polygon points="5,3 19,12 5,21"/>
-            </svg>
-            {{ streamLoading ? 'Memulai...' : 'Mulai Stream' }}
-          </button>
-        }
+      <div class="header-actions">
+        <button [ngClass]="['btn-ghost', selectMode ? 'btn-ghost--active' : '']" (click)="toggleSelectMode()">
+          {{ selectMode ? 'Selesai Pilih' : 'Pilih Kamera' }}
+        </button>
         <button class="btn-primary" (click)="openAddModal()">+ Tambah Kamera</button>
       </div>
     </div>
 
+    <!-- Search + filter -->
     <div class="table-filters">
+      <div class="search-wrap">
+        <svg class="search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none">
+          <circle cx="11" cy="11" r="7" stroke="#6A7282" stroke-width="2"/>
+          <path d="M21 21l-4.35-4.35" stroke="#6A7282" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <input
+          class="search-input"
+          type="text"
+          placeholder="Cari nama atau lokasi kamera..."
+          [value]="searchQuery"
+          (input)="onSearchInput($event)" />
+      </div>
       <div class="select-wrap select-wrap--sm">
-        <select class="table-filter-select" [value]="floorFilter" (change)="onFloorFilterChange($event)">
-          <option value="semua">Semua Lantai</option>
-          @for (f of floors; track f) {
-            <option [value]="f">{{ f }}</option>
+        <select class="table-filter-select" [value]="groupFilter" (change)="onGroupFilterChange($event)">
+          <option value="semua">Semua Grup</option>
+          <option value="none">Tanpa Grup</option>
+          @for (g of groups; track g.id) {
+            <option [value]="g.id">{{ g.name }}</option>
           }
         </select>
         <svg class="select-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -47,10 +42,20 @@
         </svg>
       </div>
       <div class="select-wrap select-wrap--sm">
-        <select class="table-filter-select" [value]="statusFilter" (change)="onStatusFilterChange($event)">
-          <option value="semua">Semua Status</option>
-          <option value="aktif">Aktif</option>
-          <option value="nonaktif">Nonaktif</option>
+        <select class="table-filter-select" [value]="streamFilter" (change)="onStreamFilterChange($event)">
+          <option value="semua">Semua Stream</option>
+          <option value="aktif">Stream Aktif</option>
+          <option value="nonaktif">Stream Nonaktif</option>
+        </select>
+        <svg class="select-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <path d="M3 5l4 4 4-4" stroke="#6A7282" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="select-wrap select-wrap--sm">
+        <select class="table-filter-select" [value]="analyticsFilter" (change)="onAnalyticsFilterChange($event)">
+          <option value="semua">Semua Analitik</option>
+          <option value="aktif">Analitik Aktif</option>
+          <option value="nonaktif">Analitik Nonaktif</option>
         </select>
         <svg class="select-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none">
           <path d="M3 5l4 4 4-4" stroke="#6A7282" stroke-width="1.5" stroke-linecap="round"/>
@@ -58,73 +63,144 @@
       </div>
     </div>
 
-    <table class="cam-table">
-      <thead>
-        <tr>
-          <th>NAMA KAMERA</th>
-          <th>RTSP URL</th>
-          <th>LANTAI</th>
-          <th>STATUS</th>
-          <th>AKSI</th>
-        </tr>
-      </thead>
-      <tbody>
-        @for (cam of filteredCameras; track cam.id) {
-          <tr>
-            <td class="td-name">{{ cam.name }}</td>
-            <td class="td-url-cell">
-              <div class="td-url-inner">
-                <span class="td-url-text">
-                  {{ visibleRtsp.has(cam.id) ? cam.rtsp_url : maskedUrl(cam.rtsp_url) }}
-                </span>
-                <button class="icon-btn icon-btn--sm" title="Tampilkan / sembunyikan URL"
-                  (click)="toggleRtspVisibility(cam.id, $event)">
-                  @if (visibleRtsp.has(cam.id)) {
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                      <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19M1 1l22 22" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-                    </svg>
-                  } @else {
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="1.8"/>
-                      <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"/>
-                    </svg>
-                  }
-                </button>
-              </div>
-            </td>
-            <td class="td-floor">{{ cam.floor ?? '—' }}</td>
-            <td class="td-status">
-              <button type="button"
-                [ngClass]="['toggle', 'toggle--sm', cam.is_active ? 'toggle--on' : '']"
-                [title]="cam.is_active ? 'Nonaktifkan' : 'Aktifkan'"
-                (click)="toggleCamera(cam, $event)">
-                <span class="toggle-thumb"></span>
-              </button>
-            </td>
-            <td class="td-actions">
-              <div class="td-actions-inner">
-              <button class="icon-btn" title="Edit" (click)="openEditModal(cam, $event)">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
-                  <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                  <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                </svg>
-              </button>
-              <button class="icon-btn icon-btn--danger" title="Hapus" (click)="deleteCamera(cam, $event)">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
-                  <polyline points="3 6 5 6 21 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                  <path d="M19 6l-1 14H6L5 6M10 11v6M14 11v6M9 6V4h6v2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </button>
-              </div>
-            </td>
-          </tr>
-        } @empty {
-          <tr><td colspan="5" class="td-empty">
-            {{ cameras.length === 0 ? 'Belum ada kamera. Klik "+ Tambah Kamera" untuk menambahkan.' : 'Tidak ada kamera yang cocok dengan filter.' }}
-          </td></tr>
+    <!-- Bulk action bar -->
+    @if (selectedIds.size > 0) {
+      <div class="bulk-bar">
+        <span class="bulk-count">{{ selectedIds.size }} kamera dipilih</span>
+        <button class="btn-action" (click)="openBulkGroupPicker()">Pindahkan ke Grup</button>
+        <button class="btn-ghost btn-ghost--sm" (click)="clearSelection()">Batal</button>
+
+        @if (showBulkGroupPicker) {
+          <div class="bulk-picker">
+            <div class="select-wrap">
+              <select class="cam-select" (change)="onBulkTargetChange($event)">
+                <option value="" [selected]="bulkTargetGroupId === ''">Tanpa Grup</option>
+                @for (g of groups; track g.id) {
+                  <option [value]="g.id">{{ g.name }}</option>
+                }
+                <option value="new">+ Buat grup baru...</option>
+              </select>
+              <svg class="select-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M3 5l4 4 4-4" stroke="#6A7282" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+            </div>
+            @if (bulkTargetGroupId === 'new') {
+              <input
+                class="field-input field-input--sm"
+                type="text"
+                placeholder="Nama grup baru"
+                [value]="bulkNewGroupName"
+                (input)="bulkNewGroupName = $any($event.target).value" />
+            }
+            <button class="btn-primary" (click)="applyBulkGroup()">Terapkan</button>
+          </div>
         }
-      </tbody>
-    </table>
+      </div>
+    }
+
+    <!-- Grouped table -->
+    @for (section of groupedSections; track section.key) {
+      <div class="group-section">
+        <div class="group-header" (click)="toggleGroupCollapse(section.key)">
+          <svg class="chevron" [class.open]="!isGroupCollapsed(section.key)" width="12" height="12" viewBox="0 0 14 14" fill="none">
+            <path d="M3 5l4 4 4-4" stroke="#6A7282" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <span class="group-name">{{ section.group?.name ?? 'Tanpa Grup' }}</span>
+          <span class="group-count">{{ section.cameras.length }}</span>
+          @if (section.group) {
+            <button class="icon-btn icon-btn--sm icon-btn--danger group-delete" title="Hapus grup"
+              (click)="deleteGroup(section.group, $event)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+            </button>
+          }
+        </div>
+
+        @if (!isGroupCollapsed(section.key)) {
+          <table class="cam-table">
+            <thead>
+              <tr>
+                @if (selectMode) {
+                  <th class="th-check"></th>
+                }
+                <th>NAMA KAMERA</th>
+                <th>LOKASI</th>
+                <th>STATUS STREAM</th>
+                <th>STATUS ANALITIK</th>
+                <th>ZONE</th>
+                <th>AKSI</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (cam of section.cameras; track cam.id) {
+                <tr class="cam-row">
+                  @if (selectMode) {
+                    <td class="td-check">
+                      <input type="checkbox" class="checkbox" [checked]="isSelected(cam.id)"
+                        (click)="toggleSelect(cam.id, $event)" />
+                    </td>
+                  }
+                  <td class="td-name">{{ cam.name }}</td>
+                  <td class="td-location">{{ cam.location || '—' }}</td>
+                  <td class="td-state">
+                    <span class="state-icon" [class.state-icon--on]="cam.is_active" [title]="cam.is_active ? 'Aktif' : 'Nonaktif'">
+                      @if (cam.is_active) {
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                          <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/>
+                          <path d="M8 12.5l2.5 2.5L16 9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                      } @else {
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                          <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/>
+                          <path d="M9 9l6 6M15 9l-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                        </svg>
+                      }
+                    </span>
+                  </td>
+                  <td class="td-state">
+                    <span class="state-icon" [class.state-icon--on]="cam.analytics_enabled" [title]="cam.analytics_enabled ? 'Aktif' : 'Nonaktif'">
+                      @if (cam.analytics_enabled) {
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                          <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/>
+                          <path d="M8 12.5l2.5 2.5L16 9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                      } @else {
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                          <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/>
+                          <path d="M9 9l6 6M15 9l-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                        </svg>
+                      }
+                    </span>
+                  </td>
+                  <td class="td-zone">{{ cam.zone_count }}</td>
+                  <td class="td-actions">
+                    <div class="td-actions-inner">
+                      <button class="icon-btn" title="Preview" (click)="openPreview(cam, $event)">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="1.8"/>
+                          <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"/>
+                        </svg>
+                      </button>
+                      <button class="icon-btn" title="Edit" (click)="openEditModal(cam, $event)">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+                          <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                          <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        </svg>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        }
+      </div>
+    } @empty {
+      <div class="td-empty">
+        {{ cameras.length === 0 ? 'Belum ada kamera. Klik "+ Tambah Kamera" untuk menambahkan.' : 'Tidak ada kamera yang cocok dengan pencarian/filter.' }}
+      </div>
+    }
   </div>
 
 </div>
@@ -142,22 +218,76 @@
         </button>
       </div>
       <div class="modal-body">
-        <label class="field-label">NAMA KAMERA</label>
-        <input class="field-input" type="text" placeholder="Lobby Utama 01"
-          [value]="formName" (input)="formInput('name', $event)" />
+        @if (editingCamera) {
+          <div class="modal-name-preview">{{ editingCamera.name }}</div>
+        }
 
-        <label class="field-label">LANTAI</label>
-        <input class="field-input" type="text" placeholder="Lantai 9 Tower 1"
-          [value]="formFloor" (input)="formInput('floor', $event)" />
+        <label class="field-label">LOKASI</label>
+        <input class="field-input" type="text" placeholder="Lobby Utama"
+          [value]="formLocation" (input)="formInput('location', $event)" />
+
+        <label class="field-label">GRUP</label>
+        <div class="select-wrap">
+          <select class="cam-select" (change)="onFormGroupChange($event)">
+            <option value="" [selected]="formGroupId === ''">Tanpa Grup</option>
+            @for (g of groups; track g.id) {
+              <option [value]="g.id" [selected]="formGroupId === g.id">{{ g.name }}</option>
+            }
+          </select>
+          <svg class="select-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M3 5l4 4 4-4" stroke="#6A7282" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </div>
 
         <label class="field-label">RTSP URL</label>
         <input class="field-input" type="text" placeholder="rtsp://user:pass@host/stream"
           [value]="formRtspUrl" (input)="formInput('rtspUrl', $event)" />
+
+        <div class="modal-toggle-row">
+          <span class="toggle-label">Status Stream</span>
+          <button type="button"
+            [ngClass]="['toggle', formIsActive ? 'toggle--on' : '']"
+            (click)="toggleFormStream()">
+            <span class="toggle-thumb"></span>
+          </button>
+        </div>
+        <div class="modal-toggle-row">
+          <span class="toggle-label">
+            Status Analitik
+            @if (!formIsActive) {
+              <span class="toggle-hint">(butuh stream aktif)</span>
+            }
+          </span>
+          <button type="button"
+            [ngClass]="['toggle', formAnalyticsEnabled ? 'toggle--on' : '']"
+            [disabled]="!formIsActive"
+            (click)="formAnalyticsEnabled = !formAnalyticsEnabled">
+            <span class="toggle-thumb"></span>
+          </button>
+        </div>
+
+        @if (editingCamera) {
+          <button class="btn-delete" (click)="deleteCameraFromModal()">Hapus Kamera</button>
+        }
       </div>
       <div class="modal-footer">
         <button class="btn-ghost" (click)="closeModal()">Batal</button>
         <button class="btn-primary" (click)="saveCamera()">Simpan</button>
       </div>
+    </div>
+  </div>
+}
+
+<!-- ── Preview popover (klik baris) ────────────────────────────── -->
+@if (previewCamera) {
+  <div class="preview-overlay" (click)="closePreview()">
+    <div class="preview-popover" [style.left.px]="previewPos.x" [style.top.px]="previewPos.y" (click)="$event.stopPropagation()">
+      @if (previewUrl) {
+        <img class="preview-img" [src]="previewUrl | authUrl" alt="preview" />
+      } @else {
+        <div class="preview-placeholder">Snapshot tidak tersedia</div>
+      }
+      <div class="preview-name">{{ previewCamera.name }}</div>
     </div>
   </div>
 }

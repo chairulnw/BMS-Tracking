@@ -38,43 +38,79 @@ CREATE INDEX IF NOT EXISTS idx_detections_timestamp  ON detections (timestamp DE
 
 -- ── Camera management ─────────────────────────────────────────────────────────
 
+CREATE TABLE IF NOT EXISTS camera_groups (
+    id         SERIAL PRIMARY KEY,
+    name       VARCHAR(100) NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS cameras (
+    id                 SERIAL PRIMARY KEY,
+    camera_id          VARCHAR(50)  UNIQUE,
+    name               VARCHAR(100) NOT NULL,
+    zone_location       VARCHAR(100),
+    rtsp_url           TEXT         NOT NULL,
+    floor              VARCHAR(50),
+    is_active          BOOLEAN      NOT NULL DEFAULT TRUE,
+    created_at         TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+-- Migrations (aman dijalankan berulang):
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_name = 'cameras' AND column_name = 'zone_location') THEN
+    ALTER TABLE cameras RENAME COLUMN zone_location TO location;
+  END IF;
+END $$;
+ALTER TABLE cameras ADD COLUMN IF NOT EXISTS group_id INTEGER REFERENCES camera_groups(id) ON DELETE SET NULL;
+ALTER TABLE cameras ADD COLUMN IF NOT EXISTS analytics_enabled BOOLEAN NOT NULL DEFAULT TRUE;
+
+-- ── Occupancy / zones (line or polygon) ─────────────────────────────────────────
+
+-- Zona itu sendiri gak punya tipe — tipe (line/polygon) melekat ke tiap
+-- GAMBAR (satu baris zone_cameras), karena satu zona bisa dipantau kamera A
+-- pakai garis dan kamera B pakai polygon sekaligus.
+CREATE TABLE IF NOT EXISTS zones (
     id            SERIAL PRIMARY KEY,
-    camera_id     VARCHAR(50)  UNIQUE,
     name          VARCHAR(100) NOT NULL,
-    zone_location VARCHAR(100),
-    rtsp_url      TEXT         NOT NULL,
-    floor         VARCHAR(50),
-    is_active     BOOLEAN      NOT NULL DEFAULT TRUE,
+    max_capacity  INTEGER,
     created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
--- ── Occupancy / line crossing ──────────────────────────────────────────────────
-
-CREATE TABLE IF NOT EXISTS camera_zones (
+-- Geometri disimpan per (zona, kamera) karena tiap kamera punya ruang piksel
+-- sendiri. points JSONB:
+--   type='line'    -> [{"p1":{"x":,"y":},"p2":{"x":,"y":},"in_sign":1}, ...]  (bisa >1 garis)
+--   type='polygon' -> [{"x":,"y":}, ...]  (>=3 titik, satu area per kamera)
+CREATE TABLE IF NOT EXISTS zone_cameras (
     id          SERIAL PRIMARY KEY,
-    camera_id   VARCHAR(50)  NOT NULL UNIQUE,
-    room_name   VARCHAR(100) NOT NULL,
-    floor       VARCHAR(50)
+    zone_id     INTEGER NOT NULL REFERENCES zones(id) ON DELETE CASCADE,
+    camera_id   INTEGER NOT NULL REFERENCES cameras(id) ON DELETE CASCADE,
+    type        VARCHAR(10) NOT NULL CHECK (type IN ('line', 'polygon')),
+    points      JSONB   NOT NULL,
+    UNIQUE (zone_id, camera_id)
 );
 
-CREATE TABLE IF NOT EXISTS crossing_lines (
-    id          SERIAL PRIMARY KEY,
-    camera_id   VARCHAR(50) NOT NULL,
-    p1_x        INT NOT NULL,
-    p1_y        INT NOT NULL,
-    p2_x        INT NOT NULL,
-    p2_y        INT NOT NULL,
-    in_sign     INT NOT NULL DEFAULT 1,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+CREATE INDEX IF NOT EXISTS idx_zone_cameras_camera ON zone_cameras (camera_id);
 
-CREATE INDEX IF NOT EXISTS idx_crossing_lines_camera ON crossing_lines (camera_id);
+-- Migrasi: pindahkan type dari zones (lama) ke zone_cameras (baru), aman di-re-run.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_name = 'zones' AND column_name = 'type') THEN
+    ALTER TABLE zone_cameras ADD COLUMN IF NOT EXISTS type VARCHAR(10);
+    UPDATE zone_cameras zc SET type = z.type
+      FROM zones z WHERE zc.zone_id = z.id AND zc.type IS NULL;
+    ALTER TABLE zone_cameras ALTER COLUMN type SET NOT NULL;
+    ALTER TABLE zone_cameras ADD CONSTRAINT zone_cameras_type_check
+      CHECK (type IN ('line', 'polygon'));
+    ALTER TABLE zones DROP COLUMN type;
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS occupancy_events (
     id           SERIAL PRIMARY KEY,
     camera_id    VARCHAR(50),
-    line_id      INT REFERENCES crossing_lines (id) ON DELETE CASCADE,
     direction    VARCHAR(3)  NOT NULL CHECK (direction IN ('IN', 'OUT')),
     timestamp    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     event_kind   VARCHAR(20) NOT NULL DEFAULT 'crossing',  -- 'room_entry' | 'passage' | 'crossing'
@@ -84,14 +120,49 @@ CREATE TABLE IF NOT EXISTS occupancy_events (
 );
 
 -- Migrations (aman dijalankan berulang):
--- ALTER TABLE occupancy_events ADD COLUMN IF NOT EXISTS event_kind   VARCHAR(20) NOT NULL DEFAULT 'crossing';
--- ALTER TABLE occupancy_events ADD COLUMN IF NOT EXISTS snapshot_url TEXT;
--- ALTER TABLE occupancy_events ADD COLUMN IF NOT EXISTS person_label TEXT;
-ALTER TABLE occupancy_events ADD COLUMN IF NOT EXISTS track_id INTEGER;
+ALTER TABLE occupancy_events ADD COLUMN IF NOT EXISTS zone_camera_id INTEGER REFERENCES zone_cameras(id) ON DELETE CASCADE;
+ALTER TABLE occupancy_events ADD COLUMN IF NOT EXISTS point_x INTEGER;
+ALTER TABLE occupancy_events ADD COLUMN IF NOT EXISTS point_y INTEGER;
 
-CREATE INDEX IF NOT EXISTS idx_occupancy_events_timestamp ON occupancy_events (timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_occupancy_events_line      ON occupancy_events (line_id);
-CREATE INDEX IF NOT EXISTS idx_occupancy_events_person    ON occupancy_events (person_label);
+-- Migrasi satu-kali dari skema lama (camera_zones 1:1 + crossing_lines) ke
+-- zones/zone_cameras many-to-many. Aman di-re-run: camera_zones sudah gak ada
+-- setelah migrasi pertama jalan, jadi blok ini otomatis di-skip berikutnya.
+DO $$
+DECLARE
+  cz          RECORD;
+  new_zone_id INT;
+  agg_points  JSONB;
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'camera_zones') THEN
+    FOR cz IN SELECT * FROM camera_zones LOOP
+      SELECT jsonb_agg(jsonb_build_object(
+               'p1', jsonb_build_object('x', p1_x, 'y', p1_y),
+               'p2', jsonb_build_object('x', p2_x, 'y', p2_y),
+               'in_sign', in_sign
+             ))
+        INTO agg_points
+        FROM crossing_lines WHERE camera_id = cz.camera_id;
+
+      IF agg_points IS NULL THEN
+        CONTINUE;   -- room ada tapi gak ada garis tergambar, skip
+      END IF;
+
+      INSERT INTO zones (name, type) VALUES (cz.room_name, 'line') RETURNING id INTO new_zone_id;
+
+      INSERT INTO zone_cameras (zone_id, camera_id, points)
+        SELECT new_zone_id, c.id, agg_points
+          FROM cameras c WHERE c.camera_id = cz.camera_id;
+    END LOOP;
+
+    ALTER TABLE occupancy_events DROP COLUMN IF EXISTS line_id;
+    DROP TABLE camera_zones;
+    DROP TABLE crossing_lines;
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_occupancy_events_timestamp    ON occupancy_events (timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_occupancy_events_zone_camera  ON occupancy_events (zone_camera_id);
+CREATE INDEX IF NOT EXISTS idx_occupancy_events_person       ON occupancy_events (person_label);
 
 -- ── Camera events (dashboard / overview) ─────────────────────────────────────
 

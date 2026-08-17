@@ -52,6 +52,15 @@ async def lifespan(app: FastAPI):
     app.state.stream_manager = StreamManager()
     print("[startup] models ready\n")
 
+    try:
+        app.state.stream_manager.start(
+            yolo_model=YOLO_MODEL, reid_model=REID_MODEL,
+            conf_threshold=0.5, reid_threshold=0.62,
+        )
+        print("[startup] stream auto-started")
+    except RuntimeError as exc:
+        print(f"[startup] stream tidak auto-start: {exc}")
+
     yield
 
     print("[shutdown] stopping stream (if running)…")

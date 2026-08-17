@@ -15,6 +15,7 @@ venv/
 # Output video
 output/
 thumbnails/
+sample/
 
 # macOS
 .DS_Store

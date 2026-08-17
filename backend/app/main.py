@@ -1,3 +1,4 @@
+import json
 import os
 from contextlib import asynccontextmanager
 
@@ -9,12 +10,20 @@ from fastapi.middleware.cors import CORSMiddleware
 load_dotenv()
 
 from app.auth import get_current_user
-from app.routers import auth, camera_events, cameras, detections, persons, thumbnails
+from app.routers import auth, camera_events, cameras, detections, persons, thumbnails, zones
+
+
+async def _init_connection(conn: asyncpg.Connection) -> None:
+    await conn.set_type_codec(
+        "jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog", format="text"
+    )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.pool = await asyncpg.create_pool(os.environ["DATABASE_URL"], min_size=2, max_size=10)
+    app.state.pool = await asyncpg.create_pool(
+        os.environ["DATABASE_URL"], min_size=2, max_size=10, init=_init_connection
+    )
     # Backfill camera_id for rows added without it (extract from unicast/ RTSP path)
     await app.state.pool.execute(
         """
@@ -44,6 +53,7 @@ app.include_router(detections.router, dependencies=[Depends(get_current_user)])
 app.include_router(thumbnails.router, dependencies=[Depends(get_current_user)])
 app.include_router(cameras.router, dependencies=[Depends(get_current_user)])
 app.include_router(camera_events.router, dependencies=[Depends(get_current_user)])
+app.include_router(zones.router, dependencies=[Depends(get_current_user)])
 
 
 @app.get("/health")

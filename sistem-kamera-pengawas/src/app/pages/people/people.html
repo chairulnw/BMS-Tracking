@@ -274,14 +274,14 @@
 @if (occupancy.length > 0) {
   <div class="occupancy-section">
     <div class="occupancy-header-row">
-      <span class="occ-col occ-col--name">NAMA RUANGAN</span>
-      <span class="occ-col">LANTAI</span>
+      <span class="occ-col occ-col--name">NAMA ZONA</span>
+      <span class="occ-col">KAPASITAS MAKS</span>
       <span class="occ-col occ-col--count">JUMLAH ORANG</span>
     </div>
-    @for (room of occupancy; track room.camera_id) {
+    @for (room of occupancy; track room.zone_id) {
       <div class="occupancy-row">
-        <span class="occ-col occ-col--name occ-val--name">{{ room.room_name }}</span>
-        <span class="occ-col occ-val">{{ room.floor ?? '—' }}</span>
+        <span class="occ-col occ-col--name occ-val--name">{{ room.zone_name }}</span>
+        <span class="occ-col occ-val">{{ room.max_capacity ?? '—' }}</span>
         <span class="occ-col occ-col--count occ-val--count"
               [ngClass]="room.current_occupancy > 0 ? 'occ-val--positive' : ''">
           {{ room.current_occupancy }}

@@ -45,60 +45,142 @@ class MovementRecord(BaseModel):
     track_id:     int | None = None
 
 
+# ── Camera groups ────────────────────────────────────────────────────────────
+
+class CameraGroupIn(BaseModel):
+    name: str
+
+
+class CameraGroupResponse(CameraGroupIn):
+    id:         int
+    created_at: datetime
+
+
 # ── Cameras (CRUD) ───────────────────────────────────────────────────────────
 
 class CameraIn(BaseModel):
-    camera_id:     str | None  = None
+    camera_id:          str | None  = None
+    location:            str | None  = None
+    group_id:           int | None  = None
+    rtsp_url:           str
+    is_active:          bool        = True
+    analytics_enabled:  bool        = True
+
+
+class CameraGroupAssign(BaseModel):
+    group_id: int | None = None
+
+
+class CameraResponse(BaseModel):
+    id:                 int
+    camera_id:          str | None
+    name:               str
+    location:           str | None
+    group_id:           int | None
+    group_name:         str | None = None
+    rtsp_url:           str
+    is_active:          bool
+    analytics_enabled:  bool
+    zone_count:         int = 0
+    created_at:         datetime
+
+
+# ── Zones (line or polygon occupancy areas) ────────────────────────────────────
+
+class ZoneIn(BaseModel):
+    """Buat zona baru — wajib langsung bawa minimal 1 sumber kamera + gambarnya,
+    gak ada zona kosong. Tipe (line/polygon) melekat ke gambar ini, bukan ke zona."""
     name:          str
-    zone_location: str | None  = None
-    floor:         str | None  = None
-    rtsp_url:      str
-    is_active:     bool        = True
+    max_capacity:  int | None = None
+    camera_id:     str            # cameras.camera_id (string) — sumber pertama
+    type:          str            # "line" | "polygon" — tipe gambar pertama ini
+    points:        list[dict]
 
 
-class CameraResponse(CameraIn):
-    id:         int
-    created_at: datetime
+class ZoneUpdate(BaseModel):
+    name:         str
+    max_capacity: int | None = None
 
 
-class SaveZoneRequest(BaseModel):
-    room_name: str
-    floor:     str | None = None
+class ZoneResponse(BaseModel):
+    id:                 int
+    name:               str
+    max_capacity:       int | None
+    camera_count:       int = 0
+    camera_ids:         list[str] = []   # cameras.camera_id (string) — dipakai utk filter
+    types:              list[str] = []   # tipe gambar unik yang ada di zona ini
+    created_at:         datetime
 
 
-# ── Crossing lines ────────────────────────────────────────────────────────────
-
-class CrossingLineIn(BaseModel):
-    p1_x:    int
-    p1_y:    int
-    p2_x:    int
-    p2_y:    int
-    in_sign: int = 1
+class ZoneCameraIn(BaseModel):
+    type:   str          # "line" | "polygon" — ditanyakan tiap kali mau gambar
+    points: list[dict]   # line: [{"p1":{},"p2":{},"in_sign":1}, ...]; polygon: [{"x":,"y":}, ...]
 
 
-class CrossingLineResponse(CrossingLineIn):
-    id:         int
-    camera_id:  str
-    created_at: datetime
+class ZoneCameraResponse(BaseModel):
+    id:            int
+    zone_id:       int
+    camera_id:     int
+    camera_str_id: str | None = None   # cameras.camera_id (string) — dipakai utk snapshot URL
+    camera_name:   str | None = None
+    type:          str
+    points:        list[dict]
+
+
+class ZoneDetailResponse(ZoneResponse):
+    cameras: list[ZoneCameraResponse] = []
+
+
+class ZoneForCameraResponse(BaseModel):
+    """Geometri satu gambar zona untuk satu kamera tertentu — dipakai AI service saat stream start."""
+    zone_id:        int
+    zone_camera_id: int
+    name:           str
+    type:           str
+    points:         list[dict]
+    max_capacity:   int | None
+
+
+class ZoneHistoryPoint(BaseModel):
+    date:      date
+    count_in:  int
+    count_out: int
+
+
+class ZoneHeatmapResponse(BaseModel):
+    grid_size: int
+    cells:     list[list[int]]
+
+
+class ZoneEventResponse(BaseModel):
+    id:           int
+    timestamp:    datetime
+    direction:    str
+    person_label: str | None
+    snapshot_url: str | None
+    camera_id:    str | None
+    camera_name:  str | None
 
 
 # ── Occupancy ─────────────────────────────────────────────────────────────────
 
 class OccupancyEventCreate(BaseModel):
-    camera_id:    str
-    line_id:      int
-    direction:    str               # "IN" or "OUT"
-    timestamp:    datetime | None = None
-    event_kind:   str | None      = None   # "room_entry" | "passage" | "crossing"
-    snapshot_url: str | None      = None
-    person_label: str | None      = None
-    track_id:     int | None      = None
+    camera_id:      str
+    zone_camera_id: int | None = None
+    direction:      str               # "IN" or "OUT"
+    timestamp:      datetime | None = None
+    event_kind:     str | None      = None   # "room_entry" | "passage" | "crossing"
+    snapshot_url:   str | None      = None
+    person_label:   str | None      = None
+    track_id:       int | None      = None
+    point_x:        int | None      = None
+    point_y:        int | None      = None
 
 
 class OccupancyResponse(BaseModel):
-    camera_id:          str
-    room_name:          str
-    floor:              str | None
+    zone_id:            int
+    zone_name:          str
+    max_capacity:       int | None
     count_in:           int
     count_out:          int
     current_occupancy:  int     # count_in - count_out

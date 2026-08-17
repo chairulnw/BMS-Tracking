@@ -26,6 +26,11 @@ app-sidebar {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+  scrollbar-width: none;       /* Firefox */
+}
+
+.content::-webkit-scrollbar {
+  display: none;               /* Chrome, Safari, Edge */
 }
 
 .content > :not(router-outlet) {

@@ -1,6 +1,5 @@
 import os
 import re
-from datetime import date, datetime, timezone
 from urllib.parse import urlparse
 
 import httpx
@@ -8,18 +7,30 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from app.auth import create_access_token
 from app.schemas import (
+    CameraGroupAssign,
+    CameraGroupIn,
+    CameraGroupResponse,
     CameraIn,
     CameraResponse,
-    CrossingLineIn,
-    CrossingLineResponse,
-    OccupancyEventCreate,
-    OccupancyResponse,
-    SaveZoneRequest,
 )
 
 router = APIRouter(tags=["cameras"])
 
 _AI_URL = lambda: os.getenv("AI_SERVICE_URL", "http://localhost:8001")
+
+
+async def _restart_ai_stream() -> None:
+    """Restart stream AI service supaya perubahan kamera (aktif/nonaktif, RTSP,
+    dihapus) langsung berlaku tanpa perlu tombol manual. Best-effort — kalau AI
+    service down, CRUD kamera tetap sukses."""
+    headers = {"Authorization": f"Bearer {create_access_token('backend-service')}"}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(f"{_AI_URL()}/stream/stop", headers=headers)
+            r = await client.post(f"{_AI_URL()}/stream/start", json={}, headers=headers)
+            r.raise_for_status()
+    except Exception as exc:
+        print(f"[cameras] gagal restart AI stream: {exc}")
 
 
 def _extract_cam_id(rtsp_url: str) -> str | None:
@@ -35,6 +46,55 @@ def _extract_cam_id(rtsp_url: str) -> str | None:
         return None
 
 
+# ── Camera groups ─────────────────────────────────────────────────────────────
+
+@router.get("/camera-groups", response_model=list[CameraGroupResponse])
+async def list_camera_groups(request: Request) -> list[CameraGroupResponse]:
+    rows = await request.app.state.pool.fetch(
+        "SELECT * FROM camera_groups ORDER BY name"
+    )
+    return [dict(r) for r in rows]
+
+
+@router.post("/camera-groups", response_model=CameraGroupResponse, status_code=201)
+async def create_camera_group(req: CameraGroupIn, request: Request) -> CameraGroupResponse:
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(400, "Nama grup tidak boleh kosong")
+    row = await request.app.state.pool.fetchrow(
+        """
+        INSERT INTO camera_groups (name) VALUES ($1)
+        ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+        RETURNING *
+        """,
+        name,
+    )
+    return dict(row)
+
+
+@router.delete("/camera-groups/{group_id}", status_code=204)
+async def delete_camera_group(group_id: int, request: Request) -> None:
+    await request.app.state.pool.execute(
+        "DELETE FROM camera_groups WHERE id = $1", group_id
+    )
+
+
+_CAMERA_SELECT = """
+    SELECT
+        c.id, c.camera_id, c.name, c.location, c.group_id, c.rtsp_url,
+        c.is_active, c.analytics_enabled, c.created_at,
+        cg.name AS group_name,
+        COALESCE(zc.zone_count, 0)::int AS zone_count
+    FROM cameras c
+    LEFT JOIN camera_groups cg ON cg.id = c.group_id
+    LEFT JOIN (
+        SELECT camera_id, COUNT(*) AS zone_count
+        FROM zone_cameras
+        GROUP BY camera_id
+    ) zc ON zc.camera_id = c.id
+"""
+
+
 # ── Camera CRUD ───────────────────────────────────────────────────────────────
 
 @router.get("/cameras", response_model=list[CameraResponse])
@@ -43,48 +103,94 @@ async def list_cameras(
     is_active: bool | None = Query(None),
 ) -> list[CameraResponse]:
     if is_active is None:
-        rows = await request.app.state.pool.fetch(
-            "SELECT * FROM cameras ORDER BY id"
-        )
+        rows = await request.app.state.pool.fetch(f"{_CAMERA_SELECT} ORDER BY c.id")
     else:
         rows = await request.app.state.pool.fetch(
-            "SELECT * FROM cameras WHERE is_active = $1 ORDER BY id", is_active
+            f"{_CAMERA_SELECT} WHERE c.is_active = $1 ORDER BY c.id", is_active
         )
     return [dict(r) for r in rows]
 
 
 @router.post("/cameras", response_model=CameraResponse, status_code=201)
 async def create_camera(req: CameraIn, request: Request) -> CameraResponse:
+    pool = request.app.state.pool
     camera_id = req.camera_id or _extract_cam_id(req.rtsp_url)
-    row = await request.app.state.pool.fetchrow(
-        """
-        INSERT INTO cameras (camera_id, name, zone_location, floor, rtsp_url, is_active)
-        VALUES ($1, $2, $3, $4, $5, $6) RETURNING *
-        """,
-        camera_id, req.name, req.zone_location, req.floor, req.rtsp_url, req.is_active,
-    )
+
+    group_name = None
+    if req.group_id is not None:
+        group_name = await pool.fetchval(
+            "SELECT name FROM camera_groups WHERE id = $1", req.group_id
+        )
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            new_id = await conn.fetchval(
+                """
+                INSERT INTO cameras
+                    (camera_id, name, location, group_id, floor, rtsp_url, is_active, analytics_enabled)
+                VALUES ($1, '', $2, $3, $4, $5, $6, $7)
+                RETURNING id
+                """,
+                camera_id, req.location, req.group_id, group_name, req.rtsp_url,
+                req.is_active, req.analytics_enabled and req.is_active,
+            )
+            await conn.execute(
+                "UPDATE cameras SET name = 'Camera ' || $1::text WHERE id = $1", new_id
+            )
+    await _restart_ai_stream()
+    row = await pool.fetchrow(f"{_CAMERA_SELECT} WHERE c.id = $1", new_id)
     return dict(row)
 
 
 @router.put("/cameras/{cam_id}", response_model=CameraResponse)
 async def update_camera(cam_id: int, req: CameraIn, request: Request) -> CameraResponse:
+    pool = request.app.state.pool
     camera_id = req.camera_id or _extract_cam_id(req.rtsp_url)
-    row = await request.app.state.pool.fetchrow(
+
+    group_name = None
+    if req.group_id is not None:
+        group_name = await pool.fetchval(
+            "SELECT name FROM camera_groups WHERE id = $1", req.group_id
+        )
+
+    row = await pool.fetchrow(
         """
         UPDATE cameras
-           SET camera_id     = $1,
-               name          = $2,
-               zone_location = $3,
-               floor         = $4,
-               rtsp_url      = $5,
-               is_active     = $6
-         WHERE id = $7
-        RETURNING *
+           SET camera_id         = $1,
+               location          = $2,
+               group_id          = $3,
+               floor             = $4,
+               rtsp_url          = $5,
+               is_active         = $6,
+               analytics_enabled = $7
+         WHERE id = $8
+        RETURNING id
         """,
-        camera_id, req.name, req.zone_location, req.floor, req.rtsp_url, req.is_active, cam_id,
+        camera_id, req.location, req.group_id, group_name, req.rtsp_url,
+        req.is_active, req.analytics_enabled and req.is_active, cam_id,
     )
     if not row:
         raise HTTPException(404, "Camera not found")
+    await _restart_ai_stream()
+    row = await pool.fetchrow(f"{_CAMERA_SELECT} WHERE c.id = $1", cam_id)
+    return dict(row)
+
+
+@router.patch("/cameras/{cam_id}/group", response_model=CameraResponse)
+async def assign_camera_group(cam_id: int, req: CameraGroupAssign, request: Request) -> CameraResponse:
+    pool = request.app.state.pool
+    group_name = None
+    if req.group_id is not None:
+        group_name = await pool.fetchval(
+            "SELECT name FROM camera_groups WHERE id = $1", req.group_id
+        )
+    row = await pool.fetchrow(
+        "UPDATE cameras SET group_id = $1, floor = $2 WHERE id = $3 RETURNING id",
+        req.group_id, group_name, cam_id,
+    )
+    if not row:
+        raise HTTPException(404, "Camera not found")
+    row = await pool.fetchrow(f"{_CAMERA_SELECT} WHERE c.id = $1", cam_id)
     return dict(row)
 
 
@@ -93,17 +199,7 @@ async def delete_camera(cam_id: int, request: Request) -> None:
     await request.app.state.pool.execute(
         "DELETE FROM cameras WHERE id = $1", cam_id
     )
-
-
-@router.patch("/cameras/{cam_id}/toggle", response_model=CameraResponse)
-async def toggle_camera(cam_id: int, request: Request) -> CameraResponse:
-    row = await request.app.state.pool.fetchrow(
-        "UPDATE cameras SET is_active = NOT is_active WHERE id = $1 RETURNING *",
-        cam_id,
-    )
-    if not row:
-        raise HTTPException(404, "Camera not found")
-    return dict(row)
+    await _restart_ai_stream()
 
 
 # ── Snapshot proxy ────────────────────────────────────────────────────────────
@@ -130,120 +226,3 @@ async def get_snapshot(camera_id: str, request: Request) -> Response:
         raise
     except Exception as exc:
         raise HTTPException(502, f"AI service tidak dapat dijangkau: {exc}")
-
-
-# ── Zone (room name) ──────────────────────────────────────────────────────────
-
-@router.post("/cameras/{camera_id}/zone", status_code=201)
-async def upsert_zone(camera_id: str, req: SaveZoneRequest, request: Request) -> dict:
-    pool = request.app.state.pool
-    row  = await pool.fetchrow(
-        """
-        INSERT INTO camera_zones (camera_id, room_name, floor)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (camera_id)
-        DO UPDATE SET room_name = EXCLUDED.room_name, floor = EXCLUDED.floor
-        RETURNING *
-        """,
-        camera_id, req.room_name, req.floor,
-    )
-    return dict(row)
-
-
-@router.get("/cameras/{camera_id}/zone")
-async def get_zone(camera_id: str, request: Request) -> dict:
-    row = await request.app.state.pool.fetchrow(
-        "SELECT * FROM camera_zones WHERE camera_id = $1", camera_id
-    )
-    return dict(row) if row else {}
-
-
-# ── Crossing lines ────────────────────────────────────────────────────────────
-
-@router.post("/cameras/{camera_id}/lines", response_model=list[CrossingLineResponse], status_code=201)
-async def save_lines(
-    camera_id: str,
-    lines: list[CrossingLineIn],
-    request: Request,
-) -> list[CrossingLineResponse]:
-    """Ganti semua garis crossing untuk kamera ini (delete + re-insert)."""
-    pool = request.app.state.pool
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            await conn.execute(
-                "DELETE FROM crossing_lines WHERE camera_id = $1", camera_id
-            )
-            rows = []
-            for line in lines:
-                row = await conn.fetchrow(
-                    """
-                    INSERT INTO crossing_lines (camera_id, p1_x, p1_y, p2_x, p2_y, in_sign)
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                    RETURNING *
-                    """,
-                    camera_id, line.p1_x, line.p1_y, line.p2_x, line.p2_y, line.in_sign,
-                )
-                rows.append(dict(row))
-    return rows
-
-
-@router.get("/cameras/{camera_id}/lines", response_model=list[CrossingLineResponse])
-async def get_lines(camera_id: str, request: Request) -> list[CrossingLineResponse]:
-    rows = await request.app.state.pool.fetch(
-        "SELECT * FROM crossing_lines WHERE camera_id = $1 ORDER BY id",
-        camera_id,
-    )
-    return [dict(r) for r in rows]
-
-
-# ── Occupancy events ──────────────────────────────────────────────────────────
-
-@router.post("/occupancy-events", status_code=201)
-async def create_occupancy_event(req: OccupancyEventCreate, request: Request) -> dict:
-    pool = request.app.state.pool
-    ts   = req.timestamp or datetime.now(timezone.utc)
-    row  = await pool.fetchrow(
-        """
-        INSERT INTO occupancy_events
-            (camera_id, line_id, direction, timestamp, event_kind, snapshot_url, person_label, track_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        RETURNING *
-        """,
-        req.camera_id, req.line_id, req.direction.upper(), ts,
-        req.event_kind or "crossing", req.snapshot_url, req.person_label, req.track_id,
-    )
-    return dict(row)
-
-
-@router.get("/occupancy", response_model=list[OccupancyResponse])
-async def get_occupancy(
-    request: Request,
-    date_filter: date | None = Query(None, alias="date"),
-) -> list[OccupancyResponse]:
-    pool = request.app.state.pool
-    if date_filter is None:
-        date_filter = datetime.now(timezone.utc).date()
-
-    rows = await pool.fetch(
-        """
-        SELECT
-            cz.camera_id,
-            cz.room_name,
-            COALESCE(cz.floor, c.floor) AS floor,
-            COALESCE(SUM(CASE WHEN oe.direction = 'IN'  THEN 1 ELSE 0 END), 0)::int AS count_in,
-            COALESCE(SUM(CASE WHEN oe.direction = 'OUT' THEN 1 ELSE 0 END), 0)::int AS count_out
-        FROM camera_zones cz
-        LEFT JOIN cameras c             ON c.camera_id = cz.camera_id
-        LEFT JOIN crossing_lines cl     ON cl.camera_id = cz.camera_id
-        LEFT JOIN occupancy_events oe
-               ON oe.line_id = cl.id
-              AND (oe.timestamp AT TIME ZONE 'UTC')::date = $1
-        GROUP BY cz.camera_id, cz.room_name, COALESCE(cz.floor, c.floor)
-        ORDER BY cz.room_name
-        """,
-        date_filter,
-    )
-    return [
-        {**dict(r), "current_occupancy": r["count_in"] - r["count_out"]}
-        for r in rows
-    ]

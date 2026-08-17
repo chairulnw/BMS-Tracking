@@ -65,27 +65,17 @@ def _cross_side(px: int, py: int, lx1: int, ly1: int, lx2: int, ly2: int) -> flo
     return float((lx2 - lx1) * (py - ly1) - (ly2 - ly1) * (px - lx1))
 
 
-def _fetch_crossing_lines(camera_id: str) -> list[dict]:
+def _fetch_zones(camera_id: str) -> list[dict]:
+    """Ambil semua zona (line/polygon) yang dipantau kamera ini, lengkap dengan
+    geometri (zone_camera_id, type, points, max_capacity)."""
     url = os.getenv("BACKEND_URL", "http://localhost:8002")
     try:
-        r = requests.get(f"{url}/cameras/{camera_id}/lines", headers=_auth_headers(), timeout=3.0)
+        r = requests.get(f"{url}/zones/for-camera/{camera_id}", headers=_auth_headers(), timeout=3.0)
         if r.ok:
             return r.json()
     except Exception as exc:
-        print(f"[{camera_id}] gagal load crossing lines: {exc}")
+        print(f"[{camera_id}] gagal load zones: {exc}")
     return []
-
-
-def _fetch_has_zone(camera_id: str) -> bool:
-    """Cek apakah kamera punya entry di camera_zones (berarti crossing = masuk ruangan)."""
-    url = os.getenv("BACKEND_URL", "http://localhost:8002")
-    try:
-        r = requests.get(f"{url}/cameras/{camera_id}/zone", headers=_auth_headers(), timeout=3.0)
-        if r.ok:
-            return bool(r.json())  # {} = tidak ada zona, {id:..., room_name:...} = ada
-    except Exception as exc:
-        print(f"[{camera_id}] gagal cek zone: {exc}")
-    return False
 
 
 # ── Backend client ────────────────────────────────────────────────────────────
@@ -93,26 +83,30 @@ def _fetch_has_zone(camera_id: str) -> bool:
 class _BackendClient:
     @staticmethod
     def post_occupancy_event(
-        camera_id:    str,
-        line_id:      int,
-        direction:    str,
-        event_kind:   str = "crossing",
-        snapshot_url: str | None = None,
-        person_label: str | None = None,
-        track_id:     int | None = None,
+        camera_id:      str,
+        zone_camera_id: int,
+        direction:      str,
+        event_kind:     str = "crossing",
+        snapshot_url:   str | None = None,
+        person_label:   str | None = None,
+        track_id:       int | None = None,
+        point_x:        int | None = None,
+        point_y:        int | None = None,
     ) -> None:
         url = os.getenv("BACKEND_URL", "http://localhost:8002")
         try:
             requests.post(
                 f"{url}/occupancy-events",
                 json={
-                    "camera_id":    camera_id,
-                    "line_id":      line_id,
-                    "direction":    direction,
-                    "event_kind":   event_kind,
-                    "snapshot_url": snapshot_url,
-                    "person_label": person_label,
-                    "track_id":     track_id,
+                    "camera_id":      camera_id,
+                    "zone_camera_id": zone_camera_id,
+                    "direction":      direction,
+                    "event_kind":     event_kind,
+                    "snapshot_url":   snapshot_url,
+                    "person_label":   person_label,
+                    "track_id":       track_id,
+                    "point_x":        point_x,
+                    "point_y":        point_y,
                 },
                 headers=_auth_headers(),
                 timeout=0.8,
@@ -410,12 +404,14 @@ class _CamSlot:
 
     def __init__(
         self,
-        camera_id:      str,
-        rtsp_url:       str,
-        reid_threshold: float,
-        stop_event:     threading.Event,
+        camera_id:          str,
+        rtsp_url:           str,
+        reid_threshold:     float,
+        stop_event:         threading.Event,
+        analytics_enabled:  bool = True,
     ) -> None:
-        self.camera_id   = camera_id
+        self.camera_id          = camera_id
+        self.analytics_enabled  = analytics_enabled
         self._rtsp_url   = rtsp_url
         # Playlist: comma-separated file paths → sequential playback
         parts = [p.strip() for p in rtsp_url.split(",")]
@@ -433,12 +429,12 @@ class _CamSlot:
         self.last_source_clip: str | None     = None
         self.last_local_frame: int | None     = None
 
-        # Line crossing
-        self.crossing_lines: list[dict]                    = []
-        self.has_zone:       bool                          = False
-        self._side_hist:     dict[tuple, deque]            = {}
-        self._last_dir:      dict[tuple, str]              = {}
-        self._crossing_ts:   dict[tuple, float]            = {}  # cooldown per (line_id, track_id)
+        # Zona (line + polygon) yang dipantau kamera ini
+        self.zones: list[dict]                             = []
+        self._side_hist:      dict[tuple, deque]           = {}
+        self._last_dir:       dict[tuple, str]              = {}
+        self._crossing_ts:    dict[tuple, float]            = {}  # cooldown per (zone_camera_id[+seg], track_id)
+        self._polygon_inside: dict[tuple, bool]             = {}  # state dwell per (zone_camera_id, track_id)
 
         self.fps    = 15.0
         self.width  = 1920
@@ -779,10 +775,11 @@ class BatchProcessor:
         for slot in self._slots:
             if slot.connect():
                 print(f"[{slot.camera_id}] opened {slot.width}x{slot.height} @ {slot.fps:.1f}fps")
-                slot.crossing_lines = _fetch_crossing_lines(slot.camera_id)
-                slot.has_zone       = _fetch_has_zone(slot.camera_id)
-                slot.tracker        = BYTETracker(args=self._tracker_args)
-                print(f"[{slot.camera_id}] {len(slot.crossing_lines)} crossing line(s) loaded  has_zone={slot.has_zone}")
+                slot.zones   = _fetch_zones(slot.camera_id)
+                slot.tracker = BYTETracker(args=self._tracker_args)
+                n_line = sum(1 for z in slot.zones if z["type"] == "line")
+                n_poly = sum(1 for z in slot.zones if z["type"] == "polygon")
+                print(f"[{slot.camera_id}] {n_line} line-zone(s), {n_poly} polygon-zone(s) loaded")
             else:
                 print(f"[{slot.camera_id}] ERROR: tidak bisa membuka RTSP")
 
@@ -809,6 +806,7 @@ class BatchProcessor:
                         slot._side_hist.clear()
                         slot._last_dir.clear()
                         slot._crossing_ts.clear()
+                        slot._polygon_inside.clear()
                         slot.tracker = BYTETracker(args=self._tracker_args)
                     print(f"[batch] midnight reset — identity DB dikosongkan untuk {today}")
                 now           = time.time()
@@ -894,8 +892,10 @@ class BatchProcessor:
                         n_raw = sum(1 for b in boxes if int(b.cls[0]) == 0)
 
                     # Per-camera BYTETracker update → track ID per kamera
+                    # (skip kalau analytics dimatikan untuk kamera ini — capture &
+                    # rekaman tetap jalan, cuma deteksi/tracking/event yang dilewati)
                     per_box: list[tuple[int, float, int, int, int, int, "np.ndarray | None", float]] = []
-                    if boxes is not None and slot.tracker is not None and n_raw > 0:
+                    if slot.analytics_enabled and boxes is not None and slot.tracker is not None and n_raw > 0:
                         det    = boxes.cpu().numpy()
                         tracks = slot.tracker.update(det, frame)
                         for t in tracks:
@@ -950,44 +950,75 @@ class BatchProcessor:
                                 person_pred, x1, y1, x2 - x1, y2 - y1,
                             )
 
-                    # ── Line crossing check ───────────────────────────────────
-                    if slot.crossing_lines:
-                        for track_id, _, x1, y1, x2, y2, _, _ in per_box:
-                            fx, fy = (x1 + x2) // 2, y2  # foot point
-                            for line in slot.crossing_lines:
-                                key  = (line["id"], track_id)
-                                side = _cross_side(
-                                    fx, fy,
-                                    line["p1_x"], line["p1_y"],
-                                    line["p2_x"], line["p2_y"],
-                                )
-                                hist = slot._side_hist.setdefault(key, deque(maxlen=4))
-                                if abs(side) < 1:
+                    # ── Zone check (line-crossing + polygon dwell) ────────────
+                    for zone in slot.zones:
+                        zc_id = zone["zone_camera_id"]
+
+                        if zone["type"] == "line":
+                            for track_id, _, x1, y1, x2, y2, _, _ in per_box:
+                                fx, fy = (x1 + x2) // 2, y2  # foot point
+                                for seg_i, seg in enumerate(zone["points"]):
+                                    key  = (zc_id, seg_i, track_id)
+                                    side = _cross_side(
+                                        fx, fy,
+                                        seg["p1"]["x"], seg["p1"]["y"],
+                                        seg["p2"]["x"], seg["p2"]["y"],
+                                    )
+                                    hist = slot._side_hist.setdefault(key, deque(maxlen=4))
+                                    if abs(side) < 1:
+                                        continue
+                                    hist.append(side)
+                                    if len(hist) >= 2 and hist[-2] * hist[-1] < 0:
+                                        direction = "IN" if side * seg.get("in_sign", 1) > 0 else "OUT"
+                                        # Hysteresis: arah sama berturut-turut diabaikan
+                                        if slot._last_dir.get(key) == direction:
+                                            continue
+                                        # Cooldown: minimal CROSSING_COOLDOWN detik antar event per (garis, track)
+                                        if now - slot._crossing_ts.get(key, 0.0) < CROSSING_COOLDOWN:
+                                            continue
+                                        slot._last_dir[key]    = direction
+                                        slot._crossing_ts[key] = now
+                                        snap_url     = self._save_event_snapshot(frame, x1, y1, x2, y2, slot.camera_id)
+                                        person_label = slot.db.label_of(track_id, slot.camera_id)
+                                        _BackendClient.post_occupancy_event(
+                                            slot.camera_id, zc_id, direction, "room_entry",
+                                            snap_url, person_label, track_id, fx, fy,
+                                        )
+                                        _BackendClient.post_camera_event(
+                                            slot.camera_id, "zone_entry", "info",
+                                            description=f"{direction} via {zone['name']}",
+                                            snapshot_url=snap_url,
+                                            person_label=person_label,
+                                        )
+
+                        elif zone["type"] == "polygon":
+                            polygon_np = np.array(
+                                [[p["x"], p["y"]] for p in zone["points"]], dtype=np.int32
+                            )
+                            for track_id, _, x1, y1, x2, y2, _, _ in per_box:
+                                fx, fy = (x1 + x2) // 2, y2  # foot point
+                                key = (zc_id, track_id)
+                                inside = cv2.pointPolygonTest(polygon_np, (float(fx), float(fy)), False) >= 0
+                                was_inside = slot._polygon_inside.get(key, False)
+                                if inside == was_inside:
                                     continue
-                                hist.append(side)
-                                if len(hist) >= 2 and hist[-2] * hist[-1] < 0:
-                                    direction = "IN" if side * line["in_sign"] > 0 else "OUT"
-                                    # Hysteresis: arah sama berturut-turut diabaikan
-                                    if slot._last_dir.get(key) == direction:
-                                        continue
-                                    # Cooldown: minimal CROSSING_COOLDOWN detik antar event per (line, track)
-                                    if now - slot._crossing_ts.get(key, 0.0) < CROSSING_COOLDOWN:
-                                        continue
-                                    slot._last_dir[key]    = direction
-                                    slot._crossing_ts[key] = now
-                                    event_kind   = "room_entry" if slot.has_zone else "passage"
-                                    snap_url     = self._save_event_snapshot(frame, x1, y1, x2, y2, slot.camera_id)
-                                    person_label = slot.db.label_of(track_id, slot.camera_id)
-                                    _BackendClient.post_occupancy_event(
-                                        slot.camera_id, line["id"], direction,
-                                        event_kind, snap_url, person_label, track_id,
-                                    )
-                                    _BackendClient.post_camera_event(
-                                        slot.camera_id, "zone_entry", "info",
-                                        description=f"{direction} via garis {line['id']}",
-                                        snapshot_url=snap_url,
-                                        person_label=person_label,
-                                    )
+                                if now - slot._crossing_ts.get(key, 0.0) < CROSSING_COOLDOWN:
+                                    continue
+                                slot._polygon_inside[key] = inside
+                                slot._crossing_ts[key]    = now
+                                direction    = "IN" if inside else "OUT"
+                                snap_url     = self._save_event_snapshot(frame, x1, y1, x2, y2, slot.camera_id)
+                                person_label = slot.db.label_of(track_id, slot.camera_id)
+                                _BackendClient.post_occupancy_event(
+                                    slot.camera_id, zc_id, direction, "room_entry",
+                                    snap_url, person_label, track_id, fx, fy,
+                                )
+                                _BackendClient.post_camera_event(
+                                    slot.camera_id, "zone_entry", "info",
+                                    description=f"{direction} via {zone['name']}",
+                                    snapshot_url=snap_url,
+                                    person_label=person_label,
+                                )
 
                     # Clip state diupdate di sini; frame ditulis oleh _recorder_loop
                     slot._rec_has_person = n_raw > 0
@@ -1155,9 +1186,10 @@ class StreamManager:
             if db_cameras:
                 cam_configs = [
                     {
-                        "camera_id": c.get("camera_id") or _camera_id_from_url(c["rtsp_url"]),
-                        "rtsp_url":  c["rtsp_url"],
-                        "name":      c.get("name", ""),
+                        "camera_id":         c.get("camera_id") or _camera_id_from_url(c["rtsp_url"]),
+                        "rtsp_url":          c["rtsp_url"],
+                        "name":              c.get("name", ""),
+                        "analytics_enabled": c.get("analytics_enabled", True),
                     }
                     for c in db_cameras
                 ]
@@ -1180,10 +1212,11 @@ class StreamManager:
             self._stop_event.clear()
             self._slots = [
                 _CamSlot(
-                    camera_id      = cfg["camera_id"],
-                    rtsp_url       = cfg["rtsp_url"],
-                    reid_threshold = reid_threshold,
-                    stop_event     = self._stop_event,
+                    camera_id         = cfg["camera_id"],
+                    rtsp_url          = cfg["rtsp_url"],
+                    reid_threshold    = reid_threshold,
+                    stop_event        = self._stop_event,
+                    analytics_enabled = cfg.get("analytics_enabled", True),
                 )
                 for cfg in cam_configs
             ]

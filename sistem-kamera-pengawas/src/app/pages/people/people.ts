@@ -22,9 +22,9 @@ interface BackendPerson {
 }
 
 interface OccupancyRoom {
-  camera_id:         string;
-  room_name:         string;
-  floor:             string | null;
+  zone_id:           number;
+  zone_name:         string;
+  max_capacity:      number | null;
   count_in:          number;
   count_out:         number;
   current_occupancy: number;
