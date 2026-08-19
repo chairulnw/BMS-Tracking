@@ -13,6 +13,7 @@ load_dotenv()   # baca .env sebelum apapun
 
 from app.auth import get_current_user
 from app.routers import clips, health, identities, snapshot, stream, video
+from app.schemas import DEFAULT_CONF_THRESHOLD, ASSOC_THRESHOLD
 from app.services.stream_service import StreamManager
 
 YOLO_MODEL = "yolo26n.pt"
@@ -49,7 +50,7 @@ async def lifespan(app: FastAPI):
     try:
         app.state.stream_manager.start(
             yolo_model=YOLO_MODEL, reid_model=REID_MODEL,
-            conf_threshold=0.5, reid_threshold=0.62,
+            conf_threshold=DEFAULT_CONF_THRESHOLD, reid_threshold=ASSOC_THRESHOLD,
         )
         print("[startup] stream auto-started")
     except RuntimeError as exc:

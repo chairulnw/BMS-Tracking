@@ -22,7 +22,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from ultralytics import YOLO
 
-from app.schemas import IdentityRecord, ProcessVideoRequest, ProcessVideoResponse
+from app.schemas import (
+    ASSOC_THRESHOLD,
+    IdentityRecord,
+    ProcessVideoRequest,
+    ProcessVideoResponse,
+)
 from app.services.geometry import cross_side, foot_point_xyxy, is_in_side
 
 BUFFER_FRAMES      = 10
@@ -50,7 +55,8 @@ def _debug_reid() -> bool:
 W_REID                 = 0.70
 W_TIME                 = 0.15
 W_CAM                  = 0.15
-ASSOC_THRESHOLD         = 0.62
+# ASSOC_THRESHOLD didefinisikan di app.schemas (satu sumber, dipakai juga sebagai
+# default reid_threshold di ProcessVideoRequest/StreamStartRequest).
 T_NEAR                 = 60.0     # detik — jeda ini dianggap masuk akal untuk pindah kamera
 T_FAR                  = 1800.0   # detik — jeda ini dianggap tidak informatif lagi
 TRACKLET_GAP_CYCLES    = 15       # siklus batch berturut-turut track hilang → tutup tracklet
