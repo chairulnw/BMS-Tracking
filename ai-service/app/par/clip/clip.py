@@ -3,7 +3,7 @@ import os
 import urllib
 import warnings
 from typing import Any, Union, List
-from pkg_resources import packaging
+import packaging.version  # pkg_resources.packaging dihapus di setuptools modern
 
 import torch
 from PIL import Image

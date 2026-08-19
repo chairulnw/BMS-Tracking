@@ -16,6 +16,7 @@ venv/
 output/
 thumbnails/
 sample/
+sample3/
 
 # macOS
 .DS_Store

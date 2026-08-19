@@ -1,2 +1,7 @@
 graphify-out/
 claude.md
+.claude/
+.playwright-mcp/
+plan/
+
+.DS_Store

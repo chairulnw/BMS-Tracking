@@ -1,4 +1,3 @@
-import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -13,18 +12,8 @@ from ultralytics import YOLO
 load_dotenv()   # baca .env sebelum apapun
 
 from app.auth import get_current_user
-from app.routers import health, identities, snapshot, stream, video
+from app.routers import clips, health, identities, snapshot, stream, video
 from app.services.stream_service import StreamManager
-
-# ── Suppress noisy polling routes dari access log uvicorn ─────────────────────
-_SILENT_PATHS = frozenset(["/stream/ambiguous"])
-
-class _PollFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        msg = record.getMessage()
-        return not any(p in msg for p in _SILENT_PATHS)
-
-logging.getLogger("uvicorn.access").addFilter(_PollFilter())
 
 YOLO_MODEL = "yolo26n.pt"
 REID_MODEL = "osnet_ain_x1_0"
@@ -32,7 +21,12 @@ REID_MODEL = "osnet_ain_x1_0"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if torch.backends.mps.is_available():
+        device = "mps"
+    elif torch.cuda.is_available():
+        device = "cuda"
+    else:
+        device = "cpu"
     print(f"[startup] device: {device}")
 
     app.state.yolo_model = YOLO_MODEL
@@ -89,3 +83,4 @@ app.include_router(video.router, dependencies=[Depends(get_current_user)])
 app.include_router(identities.router, dependencies=[Depends(get_current_user)])
 app.include_router(stream.router, dependencies=[Depends(get_current_user)])
 app.include_router(snapshot.router, dependencies=[Depends(get_current_user)])
+app.include_router(clips.router, dependencies=[Depends(get_current_user)])

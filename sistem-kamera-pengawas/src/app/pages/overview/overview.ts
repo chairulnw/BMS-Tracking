@@ -5,8 +5,9 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { interval } from 'rxjs';
 import { startWith, switchMap } from 'rxjs/operators';
 import { AuthUrlPipe } from '../../pipes/auth-url.pipe';
+import { environment } from '../../../environments/environment';
 
-const API = 'http://localhost:8002';
+const API = environment.apiBaseUrl;
 
 interface Stats {
   cameras_total:    number;

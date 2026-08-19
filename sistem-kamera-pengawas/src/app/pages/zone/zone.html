@@ -248,6 +248,17 @@
 
         <!-- Event history / evidence -->
         <div class="view-section-title">Riwayat Kejadian</div>
+
+        @if (playingClip) {
+          <div class="clip-player">
+            <div class="clip-player-header">
+              <span>Klip — {{ playingClip.camera_name ?? playingClip.camera_id }} · {{ playingClip.timestamp | slice:0:19 }}</span>
+              <button class="btn-ghost btn-ghost--sm" (click)="closeClipPlayer()">Tutup</button>
+            </div>
+            <video [src]="playingClipUrl | authUrl" controls autoplay class="clip-video"></video>
+          </div>
+        }
+
         <table class="event-table">
           <thead>
             <tr>
@@ -262,7 +273,14 @@
               <tr>
                 <td class="td-evidence">
                   @if (ev.snapshot_url) {
-                    <img class="evidence-thumb" [src]="ev.snapshot_url | authUrl" alt="bukti" />
+                    <button class="evidence-btn" title="Putar klip" (click)="playClip(ev)">
+                      <img class="evidence-thumb" [src]="ev.snapshot_url | authUrl" alt="preview" />
+                      <span class="evidence-play">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                          <polygon points="6,4 20,12 6,20"/>
+                        </svg>
+                      </span>
+                    </button>
                   } @else {
                     <span class="evidence-none">—</span>
                   }

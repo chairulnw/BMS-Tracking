@@ -1,0 +1,225 @@
+"""Public API stream; satu instance di app.state."""
+
+import os
+import re
+import threading
+
+import numpy as np
+
+from app.schemas import IdentityRecord, StreamStatusResponse
+from app.services.pipeline_service import W_CAM, W_REID, W_TIME, IdentityDB
+from app.services.stream_service.backend_client import _fetch_cameras, _fetch_tracklet_gallery
+from app.services.stream_service.batch_processor import BatchProcessor, load_model_bundle
+from app.services.stream_service.cam_slot import _CamSlot, _camera_id_from_url
+
+
+class StreamManager:
+    """Public API; satu instance di app.state."""
+
+    def __init__(self) -> None:
+        self._slots:            list[_CamSlot]       = []
+        self._processor:        BatchProcessor | None = None
+        self._stop_event:       threading.Event       = threading.Event()
+        self._lock:              threading.Lock        = threading.Lock()
+        self._display_names:    dict[str, str]        = {}
+        self._running                                 = False
+        self._video_identities: list[IdentityRecord]  = []
+        self._shared_db:        IdentityDB | None     = None
+
+        # Model YOLO/ReID di-cache di sini setelah pertama kali di-load, supaya
+        # restart stream (yang sekarang otomatis kejadian tiap kamera di-save)
+        # tidak reload model dari disk berulang-ulang. Lock terpisah dari
+        # self._lock supaya status() tidak ikut ke-block selama loading.
+        self._model_lock = threading.Lock()
+        self._models = None  # _ModelBundle | None
+
+    @property
+    def shared_db(self) -> "IdentityDB | None":
+        return self._shared_db
+
+    def _get_or_load_models(self, yolo_model: str, reid_model: str):
+        with self._model_lock:
+            if self._models is None:
+                self._models = load_model_bundle(yolo_model, reid_model)
+            return self._models
+
+    def start(
+        self,
+        yolo_model:     str,
+        reid_model:     str,
+        conf_threshold: float,
+        reid_threshold: float,
+        line           = None,   # legacy, tidak digunakan — garis diambil dari DB
+        w_reid:  "float | None" = None,
+        w_time:  "float | None" = None,
+        w_cam:   "float | None" = None,
+    ) -> None:
+        if self._running:
+            raise RuntimeError("Stream sudah berjalan. Panggil /stream/stop dulu.")
+
+        # Loading model (mahal, sekali per proses) dilakukan DI LUAR self._lock —
+        # dia gak menyentuh state bersama, jadi status()/route lain gak perlu nunggu.
+        models = self._get_or_load_models(yolo_model, reid_model)
+
+        with self._lock:
+            if self._running:
+                raise RuntimeError("Stream sudah berjalan. Panggil /stream/stop dulu.")
+
+            # Prioritas: ambil dari database, fallback ke env
+            db_cameras = _fetch_cameras()
+            if db_cameras:
+                cam_configs = [
+                    {
+                        "camera_id":         c.get("camera_id") or _camera_id_from_url(c["rtsp_url"]),
+                        "rtsp_url":          c["rtsp_url"],
+                        "name":              c.get("name", ""),
+                        "analytics_enabled": c.get("analytics_enabled", True),
+                        "group_id":          c.get("group_id"),
+                    }
+                    for c in db_cameras
+                ]
+                print(f"[stream] {len(cam_configs)} kamera dari database.")
+            else:
+                urls_raw = os.getenv("RTSP_URLS", "").strip()
+                if not urls_raw:
+                    raise RuntimeError(
+                        "Tidak ada kamera di database dan RTSP_URLS tidak ditemukan di .env"
+                    )
+                urls = [u.strip() for u in urls_raw.split(",") if u.strip()]
+                if not urls:
+                    raise RuntimeError("RTSP_URLS kosong atau tidak valid.")
+                cam_configs = [
+                    {"camera_id": _camera_id_from_url(u), "rtsp_url": u, "name": ""}
+                    for u in urls
+                ]
+                print(f"[stream] {len(cam_configs)} kamera dari .env (fallback).")
+
+            self._stop_event.clear()
+            self._slots = [
+                _CamSlot(
+                    camera_id         = cfg["camera_id"],
+                    rtsp_url          = cfg["rtsp_url"],
+                    reid_threshold    = reid_threshold,
+                    stop_event        = self._stop_event,
+                    analytics_enabled = cfg.get("analytics_enabled", True),
+                )
+                for cfg in cam_configs
+            ]
+
+            # Shared IdentityDB (PAR extractor wired in setelah models siap)
+            shared_db = IdentityDB(
+                reid_threshold,
+                w_reid=w_reid if w_reid is not None else W_REID,
+                w_time=w_time if w_time is not None else W_TIME,
+                w_cam=w_cam if w_cam is not None else W_CAM,
+            )
+            shared_db._par = models.par
+            shared_db.set_camera_groups({cfg["camera_id"]: cfg.get("group_id") for cfg in cam_configs})
+            self._shared_db = shared_db
+            for slot in self._slots:
+                slot.db = shared_db
+
+            # Pulihkan gallery ReID hari ini dari DB — supaya restart AI service
+            # di tengah hari tidak membuat orang yang sama dapat Person ID baru
+            # (plan/07-fase2-detail.md §7). Hanya tracklet hari ini, sesuai ADR-001.
+            gallery_entries = _fetch_tracklet_gallery()
+            if gallery_entries:
+                shared_db.load_gallery(gallery_entries)
+                print(f"[stream] gallery dipulihkan: {len(gallery_entries)} entri, "
+                      f"{len(shared_db._embeddings)} orang")
+
+            # Bangun event chain antar clip berdasarkan urutan timestamp di nama file
+            all_clips: list[tuple[_CamSlot, str]] = []
+            for slot in self._slots:
+                for path in slot._playlist:
+                    all_clips.append((slot, path))
+            if all_clips:
+                def _ts_key(item: tuple) -> str:
+                    m = re.search(r"\d{8}_\d{6}", item[1])
+                    return m.group() if m else ""
+                all_clips.sort(key=_ts_key)
+                events = [threading.Event() for _ in range(len(all_clips) - 1)]
+                per_slot: dict[str, list[tuple[str, threading.Event | None, threading.Event | None]]] = {
+                    s.camera_id: [] for s in self._slots
+                }
+                for i, (slot, path) in enumerate(all_clips):
+                    wait_ev = events[i - 1] if i > 0 else None
+                    done_ev = events[i]     if i < len(all_clips) - 1 else None
+                    per_slot[slot.camera_id].append((path, wait_ev, done_ev))
+                for slot in self._slots:
+                    if slot._playlist:
+                        slot._playlist_events = per_slot[slot.camera_id]
+            has_playlist = any(s._playlist for s in self._slots)
+            self._processor = BatchProcessor(
+                slots          = self._slots,
+                models         = models,
+                conf_threshold = conf_threshold,
+                stop_event     = self._stop_event,
+                auto_stop_cb   = self.stop if has_playlist else None,
+            )
+            self._processor.start()
+            self._running = True
+            print(f"[stream] {len(self._slots)} kamera dimulai (batch mode).")
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._processor:
+            self._processor.join()
+        with self._lock:
+            self._running = False
+
+    def update_identities(self, identities: list) -> None:
+        with self._lock:
+            self._video_identities = list(identities)
+
+    def get_identities(self) -> list[IdentityRecord]:
+        records = self._all_identity_records()
+        with self._lock:
+            return [
+                IdentityRecord(
+                    name      = self._display_names.get(r.name, r.name),
+                    track_ids = r.track_ids,
+                )
+                for r in records
+            ]
+
+    def rename_identity(self, old_name: str, new_name: str) -> "IdentityRecord | None":
+        for record in self._all_identity_records():
+            with self._lock:
+                display = self._display_names.get(record.name, record.name)
+            if display == old_name:
+                with self._lock:
+                    self._display_names[record.name] = new_name
+                return IdentityRecord(name=new_name, track_ids=record.track_ids)
+        return None
+
+    def status(self) -> StreamStatusResponse:
+        frames = sum(s.get_state()["frames_processed"] for s in self._slots)
+        with self._lock:
+            running = self._running
+        return StreamStatusResponse(
+            running          = running,
+            count_in         = 0,
+            count_out        = 0,
+            frames_processed = frames,
+            identities       = self.get_identities(),
+            rtsp_configured  = bool(self._slots) or bool(os.getenv("RTSP_URLS", "").strip()),
+        )
+
+    def get_snapshot(self, camera_id: str) -> "np.ndarray | None":
+        for slot in self._slots:
+            if slot.camera_id == camera_id and slot.last_frame is not None:
+                return slot.last_frame.copy()
+        return None
+
+    def _all_identity_records(self) -> list[IdentityRecord]:
+        seen: set[str] = set()
+        records: list[IdentityRecord] = []
+        for slot in self._slots:
+            for r in slot.get_state()["identities"]:
+                if r.name not in seen:
+                    seen.add(r.name)
+                    records.append(r)
+        with self._lock:
+            records.extend(self._video_identities)
+        return records

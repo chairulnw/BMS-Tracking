@@ -11,9 +11,12 @@ class PersonResponse(BaseModel):
     first_seen:         datetime | None
     last_seen:          datetime | None
     last_camera:        str | None
+    last_camera_name:   str | None = None
     best_thumbnail_url: str | None
     is_known:           bool
     enrollment_date:    date | None
+    jabatan:            str | None = None
+    observation_count:  int = 0
 
 
 class DetectionRecord(BaseModel):
@@ -30,6 +33,32 @@ class PersonDetail(PersonResponse):
 
 class RenameRequest(BaseModel):
     new_name: str
+
+
+class PersonUpdate(BaseModel):
+    name:    str | None = None
+    jabatan: str | None = None
+
+
+class PeopleFeedItem(BaseModel):
+    detection_id:  int
+    person_id:     int | None
+    person_label:  str | None
+    person_name:   str | None = None
+    is_known:      bool = False
+    camera_id:     str
+    camera_name:   str | None
+    timestamp:     datetime
+    thumbnail_url: str | None
+    tracklet_id:   int | None = None  # None = deteksi ini belum punya tracklet tertaut (appearance search tidak tersedia untuknya)
+
+
+class PeopleFeedResponse(BaseModel):
+    items: list[PeopleFeedItem]
+    total: int
+    page:  int
+    pages: int
+    limit: int
 
 
 class MovementRecord(BaseModel):
@@ -247,6 +276,84 @@ class ThumbnailUpdate(BaseModel):
     person_label:  str
     camera_id:     str
     thumbnail_url: str
+
+
+# ── Tracklets ────────────────────────────────────────────────────────────────
+
+class TrackletCreate(BaseModel):
+    camera_id:          str
+    track_id:            int
+    person_label:        str | None = None   # None = Unassociated (di bawah threshold)
+    started_at:           datetime
+    ended_at:             datetime
+    n_detections:         int
+    best_thumbnail_url:   str | None = None
+    embedding:            list[float]         # 512-dim OSNet, L2-normalized
+    assoc_score:          float | None = None
+    attrs:                dict | None = None  # skor mentah PAR (Fase 3), None kalau PAR nonaktif
+    pos_x:                int | None = None  # titik kaki sampel ber-confidence tertinggi (fallback lama)
+    pos_y:                int | None = None
+    positions:            list[list[int]] = []  # [[x,y], ...] seluruh titik kaki, urut waktu (Fase 4, Pergerakan)
+
+
+class TrackletResponse(BaseModel):
+    id:                  int
+    camera_id:           str
+    track_id:            int
+    person_id:           int | None
+    started_at:          datetime
+    ended_at:            datetime
+    n_detections:        int
+    best_thumbnail_url:  str | None
+    assoc_score:         float | None
+
+
+class TrackletGalleryEntry(BaseModel):
+    """Satu baris gallery untuk dipulihkan ke IdentityDB saat stream/start —
+    embedding + label + rentang waktu terakhir per person_id hari ini."""
+    person_id:    int
+    person_label: str
+    camera_id:    str
+    started_at:   datetime
+    ended_at:     datetime
+    embedding:    list[float]
+
+
+class TrajectoryPoint(BaseModel):
+    """Satu singgahan kamera di urutan pergerakan orang (Fase 4, T4.2)."""
+    camera_id:   str
+    camera_name: str | None
+    zone_name:   str | None
+    started_at:  datetime
+    ended_at:    datetime
+
+
+class DwellRecord(BaseModel):
+    """Total waktu tinggal per zona, dari pasangan IN/OUT occupancy_events (T4.3)."""
+    zone_name:     str
+    dwell_seconds: float
+
+
+class CameraPoint(BaseModel):
+    """Satu titik lintas (crossing) orang ini di ruang koordinat piksel asli
+    satu kamera — dipakai buat overlay trajectory/heatmap di atas snapshot kamera."""
+    camera_id:   str
+    camera_name: str | None
+    x:           int
+    y:           int
+    direction:   str
+    timestamp:   datetime
+
+
+class NameSuggestion(BaseModel):
+    """Kandidat nama untuk orang yang belum dikenali, dari kemiripan embedding
+    terhadap orang yang SUDAH bernama N hari terakhir (Fase 3). Operator yang
+    memutuskan — tidak pernah diterapkan otomatis."""
+    person_id:     int
+    name:          str
+    jabatan:       str | None
+    similarity:    float
+    thumbnail_url: str | None
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────

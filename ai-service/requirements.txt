@@ -10,3 +10,6 @@ PyJWT>=2.9.0
 torchreid
 gdown
 tensorboard
+# openai/CLIP: dipakai PARExtractor.detect_color_scored() untuk warna baju —
+# beda dari clip/ vendored PromptPAR di app/par/, jangan pip install "clip" biasa.
+git+https://github.com/openai/CLIP.git

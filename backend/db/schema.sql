@@ -11,11 +11,13 @@ CREATE TABLE IF NOT EXISTS persons (
     last_camera         TEXT,
     best_thumbnail_url  TEXT,
     is_known            BOOLEAN     NOT NULL DEFAULT FALSE,
-    enrollment_date     DATE
+    enrollment_date     DATE,
+    jabatan             TEXT
 );
 
 -- Migration (aman dijalankan berulang):
 -- ALTER TABLE persons ADD COLUMN IF NOT EXISTS enrollment_date DATE;
+ALTER TABLE persons ADD COLUMN IF NOT EXISTS jabatan TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_persons_label ON persons (label);
 CREATE INDEX IF NOT EXISTS idx_persons_last_seen ON persons (last_seen DESC);
@@ -180,6 +182,44 @@ CREATE TABLE IF NOT EXISTS camera_events (
 CREATE INDEX IF NOT EXISTS idx_camera_events_timestamp ON camera_events (timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_camera_events_camera    ON camera_events (camera_id);
 CREATE INDEX IF NOT EXISTS idx_camera_events_category  ON camera_events (category);
+
+-- ── Tracklets (Fase 2 — asosiasi identitas level-tracklet) ──────────────────
+
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE IF NOT EXISTS tracklets (
+    id                 BIGSERIAL PRIMARY KEY,
+    camera_id          VARCHAR(50) NOT NULL,
+    track_id           INTEGER     NOT NULL,
+    person_id          INT REFERENCES persons(id) ON DELETE SET NULL,  -- NULL = Unassociated
+    started_at         TIMESTAMPTZ NOT NULL,
+    ended_at           TIMESTAMPTZ NOT NULL,
+    n_detections       INTEGER     NOT NULL,
+    best_thumbnail_url TEXT,
+    embedding          vector(512),   -- rata-rata top-K crop terbaik, L2-normalized
+    assoc_score        REAL,
+    attrs              JSONB,         -- diisi Fase 3 (atribut PAR)
+    pos_x              INTEGER,       -- titik kaki (foot point) sampel ber-confidence tertinggi (fallback lama),
+    pos_y              INTEGER,       -- ruang piksel kamera ini — dipakai tab Pergerakan, TIDAK butuh zona
+    positions          JSONB          -- [[x,y], ...] seluruh titik kaki sepanjang hidup tracklet, urut waktu —
+                                       -- inilah yang bikin "garis lintasan" beneran jadi garis, bukan 1 titik
+);
+
+ALTER TABLE tracklets ADD COLUMN IF NOT EXISTS pos_x INTEGER;
+ALTER TABLE tracklets ADD COLUMN IF NOT EXISTS pos_y INTEGER;
+ALTER TABLE tracklets ADD COLUMN IF NOT EXISTS positions JSONB;
+
+CREATE INDEX IF NOT EXISTS idx_tracklets_person_started
+    ON tracklets (person_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tracklets_embedding
+    ON tracklets USING ivfflat (embedding vector_cosine_ops)
+    WITH (lists = 100);
+-- ponytail: IVFFlat cukup di volume ini (< ~1 juta baris). Naikkan ke HNSW
+-- kalau tracklets tumbuh jauh lebih besar dari itu.
+CREATE INDEX IF NOT EXISTS idx_tracklets_attrs
+    ON tracklets USING gin (attrs);
+
+ALTER TABLE detections ADD COLUMN IF NOT EXISTS tracklet_id BIGINT REFERENCES tracklets(id) ON DELETE SET NULL;
 
 -- ── Auth ──────────────────────────────────────────────────────────────────────
 

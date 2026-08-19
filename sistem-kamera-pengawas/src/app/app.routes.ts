@@ -6,6 +6,7 @@ import { Eventlog } from './pages/eventlog/eventlog';
 import { CameraPage } from './pages/camera/camera';
 import { ZonePage } from './pages/zone/zone';
 import { People } from './pages/people/people';
+import { PersonInvestigation } from './pages/person-investigation/person-investigation';
 import { Login } from './pages/login/login';
 import { authGuard } from './guards/auth.guard';
 
@@ -20,4 +21,5 @@ export const routes: Routes = [
   { path: 'camera', component: CameraPage, canActivate: [authGuard] },
   { path: 'zone', component: ZonePage, canActivate: [authGuard] },
   { path: 'people', component: People, canActivate: [authGuard] },
+  { path: 'people/:id', component: PersonInvestigation, canActivate: [authGuard] },
 ];

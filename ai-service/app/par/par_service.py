@@ -2,13 +2,14 @@
 PARExtractor — PromptPAR inference wrapper for single person crop.
 
 Model : CLIP ViT-L/14 + TransformerClassifier (MM-Former, 1 block)
-Checkpoint : RAP1.pth  (51 RAP v1 attributes)
-Attributes scored : 16 out of 51 that overlap with the user's requested set.
+Checkpoint : RAP1.pth  (51 RAP v1 attributes total)
+Attributes scored : subset dipilih di SELECTED_ATTRS (lihat N_ATTRS untuk jumlah
+persisnya) — nama atribut memakai string asli RAP1_ATTR_WORDS, tidak diterjemahkan.
 
 Usage:
     par = PARExtractor("par_checkpoints/RAP1.pth", device="cpu")
-    probs  = par.extract(bgr_crop)          # float32 (16,) probabilities
-    binary = par.attribute_vector(bgr_crop) # float32 (16,) binary @ threshold 0.45
+    probs  = par.extract(bgr_crop)          # float32 (N_ATTRS,) probabilities
+    binary = par.attribute_vector(bgr_crop) # float32 (N_ATTRS,) binary @ threshold 0.45
     score  = PARExtractor.attribute_similarity(a, b)  # [0,1] match ratio
 """
 
@@ -50,47 +51,25 @@ RAP1_ATTR_WORDS: list[str] = [
     "action pushing", "action pulling", "action carry arm", "action carry hand",
 ]
 
-# User-requested attributes that exist in RAP1 → (friendly_name, rap1_index)
-# 22 of the 38 requested attributes are colour-only (absent from RAP1) and omitted.
+# Atribut yang dipakai proyek ini → (nama, index RAP1). Nama PERSIS string asli
+# RAP1_ATTR_WORDS (bukan nama ramah buatan) — supaya tetap tertelusur ke definisi
+# aslinya. Dipangkas ke yang benar-benar dipakai UI (gender, topi, kacamata,
+# tas) — usia dibuang (konteks kantor, semua dewasa), sisanya (bentuk tubuh,
+# rambut, jenis pakaian detail, sepatu, aksi) dibuang karena daya beda rendah
+# atau tidak dipakai sebagai kriteria pencarian orang di UI.
 SELECTED_ATTRS: list[tuple[str, int]] = [
-    # body
-    ("BodyFat",            4),
-    ("BodyNormal",         5),
-    ("BodyThin",           6),
-    # head / accessories
-    ("BaldHead",           9),
-    ("LongHair",          10),
-    ("BlackHair",         11),
-    ("Hat",               12),
-    ("Glasses",           13),
-    ("Muffler",           14),
-    # upper body
-    ("UpperShirt",        15),
-    ("UpperSweater",      16),
-    ("UpperVest",         17),
-    ("UpperTshirt",       18),
-    ("UpperCotton",       19),
-    ("UpperJacket",       20),
-    ("UpperSuit",         21),
-    ("UpperTight",        22),
-    ("ShortSleeve",       23),
-    # lower body
-    ("LowerTrousers",     24),
-    ("LowerSkirt",        25),
-    ("LowerShortSkirt",   26),
-    ("LowerDress",        27),
-    ("LowerJeans",        28),
-    ("LowerTightTrousers",29),
-    # bags
-    ("Backpack",          35),
-    ("ShoulderBag",       36),
-    ("HandBag",           37),
+    ("female",              0),
+    ("head hat",           12),
+    ("head glasses",       13),
+    ("attach backpack",     35),
+    ("attach shoulder bag", 36),
+    ("attach hand bag",     37),
 ]
 ATTR_NAMES:      list[str] = [n for n, _ in SELECTED_ATTRS]
 SELECTED_INDICES: list[int] = [i for _, i in SELECTED_ATTRS]
-N_ATTRS = len(SELECTED_INDICES)   # 16
+N_ATTRS = len(SELECTED_INDICES)   # 6
 
-THRESHOLD = 0.5
+THRESHOLD = 0.6
 
 _TRANSFORM = transforms.Compose([
     transforms.Resize((224, 224)),

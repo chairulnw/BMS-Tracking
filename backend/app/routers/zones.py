@@ -197,7 +197,8 @@ async def get_occupancy(
 ) -> list[OccupancyResponse]:
     pool = request.app.state.pool
     if date_filter is None:
-        date_filter = datetime.now(timezone.utc).date()
+        from zoneinfo import ZoneInfo
+        date_filter = datetime.now(ZoneInfo("Asia/Jakarta")).date()
 
     rows = await pool.fetch(
         """
@@ -211,7 +212,7 @@ async def get_occupancy(
         LEFT JOIN zone_cameras zc   ON zc.zone_id = z.id
         LEFT JOIN occupancy_events oe
                ON oe.zone_camera_id = zc.id
-              AND (oe.timestamp AT TIME ZONE 'UTC')::date = $1
+              AND (oe.timestamp AT TIME ZONE 'Asia/Jakarta')::date = $1
         GROUP BY z.id, z.name, z.max_capacity
         ORDER BY z.name
         """,

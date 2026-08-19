@@ -10,8 +10,10 @@ import { NgClass, SlicePipe } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { forkJoin } from 'rxjs';
 import { AuthUrlPipe } from '../../pipes/auth-url.pipe';
+import { environment } from '../../../environments/environment';
 
-const API = 'http://localhost:8002';
+const API = environment.apiBaseUrl;
+const AI  = environment.aiServiceBaseUrl;
 
 type ZoneType = 'line' | 'polygon';
 
@@ -204,6 +206,9 @@ export class ZonePage implements OnInit {
   eventsPages = 1;
   eventsTotal = 0;
 
+  playingClip: ZoneEvent | null = null;
+  playingClipUrl = '';
+
   private _todayISO(): string {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -245,6 +250,7 @@ export class ZonePage implements OnInit {
   closeViewModal(): void {
     this.showViewModal = false;
     this.viewZone = null;
+    this.playingClip = null;
   }
 
   setRangeMode(mode: RangeMode): void {
@@ -300,6 +306,16 @@ export class ZonePage implements OnInit {
       this.eventsTotal = res.total;
       this.eventsPages = res.pages;
     });
+  }
+
+  playClip(ev: ZoneEvent): void {
+    if (!ev.camera_id) return;
+    this.playingClip    = ev;
+    this.playingClipUrl = `${AI}/clips/${ev.camera_id}?timestamp=${encodeURIComponent(ev.timestamp)}`;
+  }
+
+  closeClipPlayer(): void {
+    this.playingClip = null;
   }
 
   get eventsPageNumbers(): number[] {

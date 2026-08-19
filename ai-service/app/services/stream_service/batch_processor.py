@@ -1,0 +1,510 @@
+"""Satu thread inferensi untuk semua kamera — model YOLO/ReID di-load lewat
+_ModelBundle (lihat load_model_bundle) yang di-cache di StreamManager supaya
+restart stream tidak reload model dari disk tiap kali."""
+
+import os
+import queue
+import threading
+import time
+from collections import deque
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+
+import cv2
+import numpy as np
+import torch
+import torchreid
+from ultralytics import YOLO
+from ultralytics.trackers.byte_tracker import BYTETracker
+from ultralytics.utils import IterableSimpleNamespace, YAML
+from ultralytics.utils.checks import check_yaml
+
+from app.services.geometry import cross_side
+from app.services.pipeline_service import _extract_embedding
+from app.services.stream_service.backend_client import _BackendClient, _fetch_zones
+from app.services.stream_service.cam_slot import _CamSlot
+
+CROSSING_COOLDOWN = 3.0   # detik minimum antar event crossing per (garis/polygon, track)
+THUMBNAILS_DIR    = Path("thumbnails")
+PREDICTIONS_CSV   = Path("predictions.csv")  # log prediksi mode file-playback, utk dibanding ground truth
+
+
+@dataclass
+class _ModelBundle:
+    """Model YOLO + ReID yang sudah di-load, plus config tracker. Dibuat sekali
+    lewat load_model_bundle() dan dipakai ulang di setiap BatchProcessor —
+    sebelumnya model ini di-load ulang dari disk tiap kali stream direstart."""
+    detector:     YOLO
+    extractor:    "torchreid.utils.FeatureExtractor"
+    tracker_args: IterableSimpleNamespace
+    par:          None = None
+
+
+def load_model_bundle(yolo_model: str, reid_model: str) -> _ModelBundle:
+    if torch.backends.mps.is_available():
+        yolo_device = "mps"
+    elif torch.cuda.is_available():
+        yolo_device = "cuda"
+    else:
+        yolo_device = "cpu"
+    # ReID (OSNet) jalan per box terdeteksi, tiap siklus, di semua kamera —
+    # jauh lebih sering dipanggil daripada YOLO per-frame. Sebelumnya cuma
+    # cek cuda, jadi selalu jatuh ke CPU di Mac walau MPS ada — kemungkinan
+    # besar inilah bottleneck asli di balik throughput rendah (klip slow-mo,
+    # predictions.csv << ground truth).
+    if torch.backends.mps.is_available():
+        reid_device = "mps"
+    elif torch.cuda.is_available():
+        reid_device = "cuda"
+    else:
+        reid_device = "cpu"
+
+    print(f"[batch] loading YOLO({yolo_model}) → {yolo_device}, ReID({reid_model}) → {reid_device}")
+    detector = YOLO(yolo_model)
+    detector.to(yolo_device)
+    _msmt17 = Path.home() / ".cache/torch/checkpoints/osnet_ain_x1_0_msmt17.pt"
+    extractor = torchreid.utils.FeatureExtractor(
+        model_name=reid_model,
+        model_path=str(_msmt17) if _msmt17.exists() else "",
+        device=reid_device,
+    )
+    tracker_cfg = YAML.load(check_yaml("bytetrack.yaml"))
+    tracker_args = IterableSimpleNamespace(**tracker_cfg)
+
+    # PAR (atribut penampilan, Fase 3) — dijalankan sekali per tracklet pada
+    # crop terbaik (lihat _resolve_tracklet di pipeline_service.py), bukan per
+    # frame: ~2s/crop di CPU, per-frame akan melumpuhkan batch loop.
+    par = None
+    rap1_checkpoint = Path("par_checkpoints/RAP1.pth")
+    if rap1_checkpoint.exists():
+        from app.par.par_service import PARExtractor
+        try:
+            par = PARExtractor(str(rap1_checkpoint), device=reid_device)
+        except Exception as exc:
+            print(f"[batch] PAR gagal dimuat, lanjut tanpa atribut: {exc}")
+    else:
+        print(f"[batch] {rap1_checkpoint} tidak ditemukan — lanjut tanpa PAR")
+
+    print("[batch] models ready")
+    return _ModelBundle(detector=detector, extractor=extractor, tracker_args=tracker_args, par=par)
+
+
+class BatchProcessor:
+    """Satu thread inferensi untuk semua kamera.
+
+    Tiap siklus:
+      1. Ambil frame terbaru dari setiap kamera (non-blocking)
+      2. Kirim semua frame ke YOLO dalam 1 batch predict() call
+      3. Jalankan per-camera BYTETracker (slot.tracker) untuk assign track ID
+      4. Proses hasil per kamera (ReID, clip, backend POST)
+    """
+
+    def __init__(
+        self,
+        slots:          list[_CamSlot],
+        models:         _ModelBundle,
+        conf_threshold: float,
+        stop_event:     threading.Event,
+        auto_stop_cb    = None,
+    ) -> None:
+        self._slots            = slots
+        self._conf             = conf_threshold
+        self._stop             = stop_event
+        self._auto_stop_cb       = auto_stop_cb
+        self._file_slots_total:  set[str]              = set()  # slot playlist yang berhasil connect
+        self._file_slots_done:   set[str]               = set()  # slot playlist yang sudah selesai
+        self._thread: threading.Thread | None = None
+        self._offline_reported: set[str]      = set()  # kamera yang sudah dilaporkan offline
+
+        from app.services.stream_service.clip_recorder import _PredictionLogger
+        self._pred_logger = _PredictionLogger(PREDICTIONS_CSV)
+
+        self._detector      = models.detector
+        self._extractor     = models.extractor
+        self._tracker_args  = models.tracker_args
+        self._par           = models.par
+
+    def start(self) -> None:
+        self._thread = threading.Thread(
+            target=self._loop, daemon=True, name="batch-infer"
+        )
+        self._thread.start()
+
+    def join(self, timeout: float = 15.0) -> None:
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=timeout)
+
+    def _loop(self) -> None:
+        for slot in self._slots:
+            if slot.connect():
+                print(f"[{slot.camera_id}] opened {slot.width}x{slot.height} @ {slot.fps:.1f}fps")
+                slot.zones   = _fetch_zones(slot.camera_id)
+                slot.tracker = BYTETracker(args=self._tracker_args)
+                n_line = sum(1 for z in slot.zones if z["type"] == "line")
+                n_poly = sum(1 for z in slot.zones if z["type"] == "polygon")
+                print(f"[{slot.camera_id}] {n_line} line-zone(s), {n_poly} polygon-zone(s) loaded")
+            else:
+                print(f"[{slot.camera_id}] ERROR: tidak bisa membuka RTSP")
+
+        if not any(s.online for s in self._slots):
+            print("[batch] tidak ada kamera aktif.")
+            return
+
+        # Track hanya slot playlist yang berhasil connect
+        self._file_slots_total = {s.camera_id for s in self._slots if s._playlist and s.online}
+
+        frame_idx    = {s.camera_id: 0 for s in self._slots}
+        current_date = datetime.now().date()
+
+        try:
+            while not self._stop.is_set():
+                today = datetime.now().date()
+                if today != current_date:
+                    current_date = today
+                    # Flush semua tracklet terbuka SEBELUM reset — kalau tidak,
+                    # rebuild BYTETracker di bawah mendaur ulang track_id dari 1,
+                    # dan tracklet kemarin yang belum ditutup akan menerima box
+                    # orang lain hari ini (lihat plan/07-fase2-detail.md §3).
+                    closed = self._slots[0].db.close_all()
+                    if closed:
+                        self._finalize_tracklets(closed)
+                    self._slots[0].db.prune_banks()
+                    self._slots[0].db.reset()
+                    for slot in self._slots:
+                        slot._side_hist.clear()
+                        slot._last_dir.clear()
+                        slot._crossing_ts.clear()
+                        slot._polygon_inside.clear()
+                        slot.tracker = BYTETracker(args=self._tracker_args)
+                    print(f"[batch] midnight reset — identity DB dikosongkan untuk {today}")
+                now           = time.time()
+                batch_frames: list[np.ndarray] = []
+                has_new:      list[bool]        = []
+
+                for slot in self._slots:
+                    placeholder = (
+                        slot.last_frame
+                        if slot.last_frame is not None
+                        else np.zeros((slot.height, slot.width, 3), np.uint8)
+                    )
+
+                    if not slot.online:
+                        batch_frames.append(placeholder)
+                        has_new.append(False)
+                        continue
+
+                    try:
+                        frame = slot.frame_q.get_nowait()
+                    except queue.Empty:
+                        # Belum ada frame baru — pakai placeholder
+                        batch_frames.append(placeholder)
+                        has_new.append(False)
+                        continue
+
+                    if frame is None:
+                        if slot._playlist:
+                            # File playlist habis — tidak perlu reconnect
+                            print(f"[{slot.camera_id}] semua clip selesai")
+                            slot.online = False
+                            self._file_slots_done.add(slot.camera_id)
+                            if self._file_slots_done >= self._file_slots_total and self._auto_stop_cb:
+                                threading.Thread(
+                                    target=self._auto_stop_cb, daemon=True, name="auto-stop"
+                                ).start()
+                        else:
+                            # RTSP putus — reconnect seperti biasa
+                            print(f"[{slot.camera_id}] disconnected")
+                            slot.start_reconnect(self._on_reconnect)
+                        batch_frames.append(placeholder)
+                        has_new.append(False)
+                        continue
+
+                    if isinstance(frame, tuple):
+                        # Mode file-playback: (frame, source_clip, local_frame)
+                        frame, slot.last_source_clip, slot.last_local_frame = frame
+                    else:
+                        slot.last_source_clip = None
+                        slot.last_local_frame = None
+
+                    slot.last_frame = frame
+                    batch_frames.append(frame)
+                    has_new.append(True)
+
+                if not any(has_new):
+                    time.sleep(0.02)
+                    continue
+
+                # ── Batch YOLO detect — 1 GPU call untuk semua kamera ────────
+                # Pakai predict() bukan track() karena batch track() berbagi 1
+                # tracker untuk semua kamera (bug Ultralytics di non-stream mode).
+                # Tiap kamera punya BYTETracker sendiri di slot.tracker.
+                results = self._detector.predict(
+                    batch_frames,
+                    conf=self._conf,
+                    classes=[0],
+                    verbose=False,
+                )
+
+                # ── Per-camera post-processing ────────────────────────────────
+                for slot, result, is_new in zip(self._slots, results, has_new):
+                    if not is_new:
+                        continue
+
+                    frame = slot.last_frame
+                    boxes = result.boxes
+
+                    # Raw detection count — tidak butuh track ID.
+                    # Dipakai untuk clip recorder agar rekaman tetap jalan.
+                    n_raw = 0
+                    if boxes is not None:
+                        n_raw = sum(1 for b in boxes if int(b.cls[0]) == 0)
+
+                    # Per-camera BYTETracker update → track ID per kamera
+                    # (skip kalau analytics dimatikan untuk kamera ini — capture &
+                    # rekaman tetap jalan, cuma deteksi/tracking/event yang dilewati)
+                    per_box: list[tuple[int, float, int, int, int, int, "np.ndarray | None", float]] = []
+                    if slot.analytics_enabled and boxes is not None and slot.tracker is not None and n_raw > 0:
+                        det    = boxes.cpu().numpy()
+                        tracks = slot.tracker.update(det, frame)
+                        for t in tracks:
+                            x1, y1, x2, y2 = int(t[0]), int(t[1]), int(t[2]), int(t[3])
+                            track_id = int(t[4])
+                            conf_val = float(t[5])
+                            result   = _extract_embedding(self._extractor, frame, x1, y1, x2, y2,
+                                                          track_id=track_id, cam_id=slot.camera_id)
+                            emb, quality = result if result is not None else (None, 0.0)
+                            per_box.append((track_id, conf_val, x1, y1, x2, y2, emb, quality))
+
+                    active_tids = {tid for tid, *_ in per_box}
+                    ts_now = datetime.now(timezone.utc)
+
+                    # Kumpulkan bukti untuk tiap tracklet — keputusan identitas
+                    # baru diambil saat tracklet DITUTUP (lihat pipeline_service.py).
+                    for track_id, conf_val, x1, y1, x2, y2, emb, quality in per_box:
+                        slot.db.observe(slot.camera_id, track_id, emb, quality, conf_val,
+                                        frame, x1, y1, x2, y2, ts_now)
+
+                    slot.db.update_active(slot.camera_id, active_tids)
+                    closed = slot.db.close_expired(slot.camera_id, ts_now)
+                    if closed:
+                        self._finalize_tracklets(closed)
+
+                    # ── Prediction logging (mode file-playback saja) ──────────
+                    # Baris di-buffer per (cam,track_id) — baru ditulis ke CSV saat
+                    # tracklet-nya resolve (lihat _finalize_tracklets), supaya
+                    # person_pred berisi identitas akhir, bukan placeholder track_id.
+                    if slot.last_source_clip is not None:
+                        for track_id, _, x1, y1, x2, y2, _, _ in per_box:
+                            self._pred_logger.buffer(
+                                (slot.camera_id, track_id),
+                                slot.last_source_clip, slot.last_local_frame, slot.camera_id,
+                                x1, y1, x2 - x1, y2 - y1,
+                            )
+
+                    # ── Zone check (line-crossing + polygon dwell) ────────────
+                    for zone in slot.zones:
+                        zc_id = zone["zone_camera_id"]
+
+                        if zone["type"] == "line":
+                            for track_id, _, x1, y1, x2, y2, _, _ in per_box:
+                                fx, fy = (x1 + x2) // 2, y2  # foot point
+                                for seg_i, seg in enumerate(zone["points"]):
+                                    key  = (zc_id, seg_i, track_id)
+                                    side = cross_side(
+                                        fx, fy,
+                                        seg["p1"]["x"], seg["p1"]["y"],
+                                        seg["p2"]["x"], seg["p2"]["y"],
+                                    )
+                                    hist = slot._side_hist.setdefault(key, deque(maxlen=4))
+                                    if abs(side) < 1:
+                                        continue
+                                    hist.append(side)
+                                    if len(hist) >= 2 and hist[-2] * hist[-1] < 0:
+                                        direction = "IN" if side * seg.get("in_sign", 1) > 0 else "OUT"
+                                        # Hysteresis: arah sama berturut-turut diabaikan
+                                        if slot._last_dir.get(key) == direction:
+                                            continue
+                                        # Cooldown: minimal CROSSING_COOLDOWN detik antar event per (garis, track)
+                                        if now - slot._crossing_ts.get(key, 0.0) < CROSSING_COOLDOWN:
+                                            continue
+                                        slot._last_dir[key]    = direction
+                                        slot._crossing_ts[key] = now
+                                        snap_url     = self._save_event_snapshot(frame, x1, y1, x2, y2, slot.camera_id)
+                                        person_label = slot.db.label_of(track_id, slot.camera_id)
+                                        _BackendClient.post_occupancy_event(
+                                            slot.camera_id, zc_id, direction, "room_entry",
+                                            snap_url, person_label, track_id, fx, fy,
+                                        )
+                                        _BackendClient.post_camera_event(
+                                            slot.camera_id, "zone_entry", "info",
+                                            description=f"{direction} via {zone['name']}",
+                                            snapshot_url=snap_url,
+                                            person_label=person_label,
+                                        )
+
+                        elif zone["type"] == "polygon":
+                            polygon_np = np.array(
+                                [[p["x"], p["y"]] for p in zone["points"]], dtype=np.int32
+                            )
+                            for track_id, _, x1, y1, x2, y2, _, _ in per_box:
+                                fx, fy = (x1 + x2) // 2, y2  # foot point
+                                key = (zc_id, track_id)
+                                inside = cv2.pointPolygonTest(polygon_np, (float(fx), float(fy)), False) >= 0
+                                was_inside = slot._polygon_inside.get(key, False)
+                                if inside == was_inside:
+                                    continue
+                                if now - slot._crossing_ts.get(key, 0.0) < CROSSING_COOLDOWN:
+                                    continue
+                                slot._polygon_inside[key] = inside
+                                slot._crossing_ts[key]    = now
+                                direction    = "IN" if inside else "OUT"
+                                snap_url     = self._save_event_snapshot(frame, x1, y1, x2, y2, slot.camera_id)
+                                person_label = slot.db.label_of(track_id, slot.camera_id)
+                                _BackendClient.post_occupancy_event(
+                                    slot.camera_id, zc_id, direction, "room_entry",
+                                    snap_url, person_label, track_id, fx, fy,
+                                )
+                                _BackendClient.post_camera_event(
+                                    slot.camera_id, "zone_entry", "info",
+                                    description=f"{direction} via {zone['name']}",
+                                    snapshot_url=snap_url,
+                                    person_label=person_label,
+                                )
+
+                    # Clip state diupdate di sini; frame ditulis oleh _recorder_loop
+                    slot._rec_has_person = n_raw > 0
+                    slot._rec_annots = [
+                        (x1, y1, x2, y2, slot.db.name_of(tid, slot.camera_id) or f"#{tid}")
+                        for tid, _, x1, y1, x2, y2, _, _ in per_box
+                    ]
+
+                    idx = frame_idx[slot.camera_id] + 1
+                    frame_idx[slot.camera_id] = idx
+
+                    if idx % 30 == 0:
+                        h, w = frame.shape[:2]
+                        tids  = [f"t{tid}({slot.db.name_of(tid, slot.camera_id) or '?'})" for tid, *_ in per_box]
+                        print(
+                            f"[{slot.camera_id}] f{idx}  {w}x{h}"
+                            f"  raw={n_raw}  tracked={len(per_box)}"
+                            + (f"  [{', '.join(tids)}]" if tids else "")
+                        )
+
+                    if idx % 15 == 0:
+                        slot.update_state(idx, slot.db.to_records())
+
+        finally:
+            # Flush semua tracklet terbuka sebelum berhenti — kalau tidak,
+            # observasi yang sudah terkumpul hilang begitu saja tanpa POST.
+            if self._slots:
+                closed = self._slots[0].db.close_all()
+                if closed:
+                    self._finalize_tracklets(closed)
+            for slot in self._slots:
+                slot.shutdown()
+            self._pred_logger.close()
+
+    def _finalize_tracklets(self, closed: list[dict]) -> None:
+        """Tracklet baru saja ditutup (lihat pipeline_service.py._resolve_tracklet).
+        Simpan thumbnail sekali, lalu POST /detections + /tracklets (+ /camera-events
+        kalau identitas baru)."""
+        for result in closed:
+            cam   = result["cam_id"]
+            label = result["label"]
+            det_url = None
+            if result["best_crop"] is not None and result["best_crop"].size > 0:
+                det_url = self._save_crop(result["best_crop"], cam, result["track_id"])
+
+            _BackendClient.post_detection(
+                result["display_name"], cam, result["best_conf"], "appearance",
+                det_url, label, result["track_id"],
+            )
+            _BackendClient.post_tracklet(
+                cam, result["track_id"], label,
+                result["started_at"], result["ended_at"], result["n_detections"],
+                det_url, result["embedding"], result["assoc_score"],
+                par=result["par"], best_crop=result["best_crop"],
+                pos_x=result["pos_x"], pos_y=result["pos_y"],
+                positions=result["positions"],
+            )
+            if result["is_new"]:
+                _BackendClient.post_camera_event(
+                    cam, "person_detected", "info",
+                    person_label=label, snapshot_url=det_url,
+                )
+            # Tulis baris predictions.csv yang di-buffer selama tracklet ini
+            # terbuka, sekarang dengan nama akhir yang sudah resolve (§6).
+            self._pred_logger.flush((cam, result["track_id"]), result["display_name"])
+
+    def _on_reconnect(self, slot: _CamSlot, success: bool) -> None:
+        if not success:
+            print(f"[{slot.camera_id}] offline permanen")
+            if slot.camera_id not in self._offline_reported:
+                self._offline_reported.add(slot.camera_id)
+                _BackendClient.post_camera_event(
+                    slot.camera_id, "camera_offline", "critical",
+                    description=f"Kamera {slot.camera_id} tidak merespons setelah 5 percobaan",
+                )
+        else:
+            # Reconnect tidak me-rebuild BYTETracker — orang yang terekam sebelum
+            # putus koneksi kemungkinan besar sudah pergi. Tutup tracklet terbuka
+            # milik kamera ini (plan/07-fase2-detail.md §3).
+            closed = slot.db.close_all(cam_id=slot.camera_id)
+            if closed:
+                self._finalize_tracklets(closed)
+            if slot.camera_id in self._offline_reported:
+                self._offline_reported.discard(slot.camera_id)
+                _BackendClient.post_camera_event(
+                    slot.camera_id, "camera_online", "info",
+                    description=f"Kamera {slot.camera_id} kembali online",
+                )
+
+    @staticmethod
+    def _save_event_snapshot(
+        frame: np.ndarray,
+        x1: int, y1: int, x2: int, y2: int,
+        camera_id: str,
+    ) -> "str | None":
+        """Simpan crop orang saat crossing terjadi ke thumbnails/events/.
+        Crop diperbesar dari titik tengah bounding box untuk memastikan
+        minimal 120x240 px sehingga orang selalu terlihat jelas."""
+        try:
+            events_dir = THUMBNAILS_DIR / "events"
+            events_dir.mkdir(parents=True, exist_ok=True)
+            fh, fw = frame.shape[:2]
+
+            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+            half_w = max((x2 - x1) // 2 + 30, 60)   # min 120 px lebar
+            half_h = max((y2 - y1) // 2 + 40, 120)  # min 240 px tinggi
+
+            x1c = max(0, cx - half_w)
+            y1c = max(0, cy - half_h)
+            x2c = min(fw, cx + half_w)
+            y2c = min(fh, cy + half_h)
+
+            ts       = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            filename = f"{camera_id}_{ts}.jpg"
+            cv2.imwrite(str(events_dir / filename), frame[y1c:y2c, x1c:x2c])
+            backend_url = os.getenv("BACKEND_URL", "http://localhost:8002")
+            return f"{backend_url}/thumbnails/events/{filename}"
+        except Exception as exc:
+            print(f"[{camera_id}] event snapshot error: {exc}")
+            return None
+
+    @staticmethod
+    def _save_crop(crop: np.ndarray, camera_id: str, track_id: int) -> "str | None":
+        """Simpan crop yang sudah dipadding (tl.best_crop, lihat _padded_crop di
+        pipeline_service.py) — satu-satunya thumbnail per tracklet. Menggantikan
+        _save_unique_snapshot + _save_thumbnail/profile-thumbnail terpisah yang
+        ada sebelum Fase 2 (lihat plan/07-fase2-detail.md §6)."""
+        try:
+            THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
+            ts       = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            filename = f"{camera_id}_t{track_id}_{ts}.jpg"
+            cv2.imwrite(str(THUMBNAILS_DIR / filename), crop)
+            backend_url = os.getenv("BACKEND_URL", "http://localhost:8002")
+            return f"{backend_url}/thumbnails/{filename}"
+        except Exception as exc:
+            print(f"[{camera_id}] snapshot error: {exc}")
+            return None

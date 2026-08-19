@@ -1,3 +1,4 @@
+import asyncio
 import os
 import re
 from urllib.parse import urlparse
@@ -18,11 +19,28 @@ router = APIRouter(tags=["cameras"])
 
 _AI_URL = lambda: os.getenv("AI_SERVICE_URL", "http://localhost:8001")
 
+_RESTART_DEBOUNCE = 1.5  # detik — beberapa edit kamera beruntun cuma restart sekali
+_restart_task: "asyncio.Task | None" = None
+
 
 async def _restart_ai_stream() -> None:
-    """Restart stream AI service supaya perubahan kamera (aktif/nonaktif, RTSP,
-    dihapus) langsung berlaku tanpa perlu tombol manual. Best-effort — kalau AI
-    service down, CRUD kamera tetap sukses."""
+    """Jadwalkan restart stream AI service (debounced) supaya perubahan kamera
+    (aktif/nonaktif, RTSP, dihapus) langsung berlaku tanpa perlu tombol manual.
+    Restart AI service reload model dari disk (mahal, beberapa detik) — kalau
+    beberapa kamera diedit berturut-turut, di-debounce jadi satu restart saja,
+    bukan sekali per save. Best-effort — kalau AI service down, CRUD kamera
+    tetap sukses; endpoint juga tidak menunggu restart selesai."""
+    global _restart_task
+    if _restart_task is not None and not _restart_task.done():
+        _restart_task.cancel()
+    _restart_task = asyncio.create_task(_debounced_restart())
+
+
+async def _debounced_restart() -> None:
+    try:
+        await asyncio.sleep(_RESTART_DEBOUNCE)
+    except asyncio.CancelledError:
+        return  # ada edit lain masuk, restart ini dibatalkan & digantikan yang baru
     headers = {"Authorization": f"Bearer {create_access_token('backend-service')}"}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:

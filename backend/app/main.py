@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 load_dotenv()
 
 from app.auth import get_current_user
-from app.routers import auth, camera_events, cameras, detections, persons, thumbnails, zones
+from app.routers import auth, camera_events, cameras, detections, people, persons, thumbnails, tracklets, zones
 
 
 async def _init_connection(conn: asyncpg.Connection) -> None:
@@ -54,6 +54,8 @@ app.include_router(thumbnails.router, dependencies=[Depends(get_current_user)])
 app.include_router(cameras.router, dependencies=[Depends(get_current_user)])
 app.include_router(camera_events.router, dependencies=[Depends(get_current_user)])
 app.include_router(zones.router, dependencies=[Depends(get_current_user)])
+app.include_router(people.router, dependencies=[Depends(get_current_user)])
+app.include_router(tracklets.router, dependencies=[Depends(get_current_user)])
 
 
 @app.get("/health")

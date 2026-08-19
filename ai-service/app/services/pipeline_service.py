@@ -1,25 +1,33 @@
 """
 Pipeline service — callable version tanpa GUI.
 Line coordinates diterima sebagai parameter, bukan dari klik mouse.
+
+Dua IdentityDB hidup di file ini (lihat plan/07-fase2-detail.md):
+- `IdentityDB`        — live stream, berbasis tracklet (Fase 2).
+- `_LegacyIdentityDB` — dipakai HANYA oleh `process_video()` (analisis file
+  offline). Di luar cakupan Fase 2 (lihat 07-fase2-detail.md); logikanya
+  sengaja dibiarkan identik dengan versi sebelum Fase 2 supaya alat offline
+  ini tidak ikut berubah perilakunya.
 """
 
 import math
 import os
+import re
 import cv2
 import numpy as np
 import torch
 from collections import defaultdict, deque
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from ultralytics import YOLO
 
 from app.schemas import IdentityRecord, ProcessVideoRequest, ProcessVideoResponse
+from app.services.geometry import cross_side, foot_point_xyxy, is_in_side
 
-EMBED_REFRESH      = 15
 BUFFER_FRAMES      = 10
 NEAR_LINE_DIST     = 40
 MIN_CROP_PX        = 32
-MIN_ENROLL_FRAMES  = 2      # delayed enrollment: tunggu N frame berkualitas
 MIN_MARGIN         = 0.05   # gap minimum top1-top2 untuk confident match
 MAX_BANK_SIZE      = 5      # maks entry per identitas di bank embedding
 BANK_MERGE_SIM     = 0.90   # sim >= ini → update entry lama, bukan tambah baru
@@ -35,44 +43,459 @@ def _debug_reid() -> bool:
     return os.getenv("DEBUG_REID", "").lower() in ("1", "true")
 
 
-# ── Identity database ─────────────────────────────────────────────────────────
+# ── Tracklet association (Fase 2) ──────────────────────────────────────────────
+# Semua angka di bawah ini tebakan awal — wajib dituning terhadap predictions.csv
+# di mode file-playlist (T2.12). Bisa dioverride lewat StreamStartRequest.
 
-PAR_AMBIG_LOW   = 0.54   # cosine sim zone where PAR veto is consulted
-PAR_AMBIG_HIGH  = 0.63  # above this OSNet is trusted directly
-PAR_ATTR_THR    = 0.6  # attr_match below this → PAR veto → NEW
+W_REID                 = 0.70
+W_TIME                 = 0.15
+W_CAM                  = 0.15
+ASSOC_THRESHOLD         = 0.62
+T_NEAR                 = 60.0     # detik — jeda ini dianggap masuk akal untuk pindah kamera
+T_FAR                  = 1800.0   # detik — jeda ini dianggap tidak informatif lagi
+TRACKLET_GAP_CYCLES    = 15       # siklus batch berturut-turut track hilang → tutup tracklet
+TRACKLET_MAX_DURATION  = 600.0    # detik — tutup paksa + buka tracklet baru dengan key sama
+TRACKLET_MAX_SAMPLES   = 16       # maks embedding disimpan per tracklet (top-K by quality)
+TRACKLET_MAX_POSITIONS = 120      # maks titik kaki disimpan per tracklet (garis lintasan/heatmap)
+# ponytail: cap keras + FIFO drop titik TERTUA kalau kepenuhan — cukup buat tracklet
+# normal (detik-menit). Kalau nanti perlu path presisi untuk tracklet super panjang
+# (mendekati TRACKLET_MAX_DURATION), ganti ke downsampling merata bukan FIFO.
+# ponytail: top-K by quality, linear scan atas TRACKLET_MAX_SAMPLES entri. Kalau
+# nanti butuh keragaman pose (bukan sekadar ketajaman), ganti ke clustering —
+# tapi jangan sebelum ada bukti top-K saja tidak cukup.
+
+
+@dataclass
+class Tracklet:
+    cam_id:     str
+    track_id:   int
+    started_at: datetime
+    last_seen:  datetime
+    n_det:      int                       = 0
+    samples:    list                      = field(default_factory=list)  # [(emb, quality)], top-K
+    best_conf:  float                     = 0.0
+    best_crop:  "np.ndarray | None"       = None
+    best_x:     "int | None"              = None  # titik kaki (foot point) sampel best_conf — fallback lama
+    best_y:     "int | None"              = None
+    positions:  list                      = field(default_factory=list)  # [(x,y), ...] tiap observe(), urut waktu
+    missing:    int                       = 0   # siklus batch berturut-turut tanpa track ini
+
+
+def _overlaps(a: tuple[datetime, datetime], b: tuple[datetime, datetime]) -> bool:
+    return a[0] < b[1] and b[0] < a[1]
+
+
+def _f_time(dt: float) -> float:
+    if dt < 0:
+        return 0.0     # tumpang tindih — seharusnya sudah difilter hard constraint
+    if dt <= T_NEAR:
+        return 1.0
+    if dt >= T_FAR:
+        return 0.0
+    return 1.0 - (dt - T_NEAR) / (T_FAR - T_NEAR)
+
+
+def par_attrs(par, crop: "np.ndarray | None") -> "dict | None":
+    """PAR (Fase 3) — atribut penampilan + warna baju dari satu crop terbaik.
+    Fungsi lepas (bukan method IdentityDB) supaya bisa dipanggil dari thread
+    mana pun — dipakai dari worker background _PostQueue (backend_client.py
+    post_tracklet), BUKAN dari thread inferensi utama: ~2.3s/crop (didominasi
+    CLIP ViT-L/14) akan menahan semua kamera kalau dijalankan di sana.
+    None kalau PAR tidak aktif atau crop tidak ada. Skor mentah (sigmoid),
+    bukan boolean — threshold bisa diubah belakangan tanpa hitung ulang (ADR-006)."""
+    if par is None or crop is None or crop.size == 0:
+        return None
+    from app.par.par_service import ATTR_NAMES
+    probs = par.extract(crop)
+    if probs is None:
+        return None
+    attrs: dict = {name: float(p) for name, p in zip(ATTR_NAMES, probs)}
+    upper = par.detect_color_scored(crop, "upper")
+    if upper is not None:
+        attrs["upper_color"], attrs["upper_color_score"] = upper[0], float(upper[1])
+    lower = par.detect_color_scored(crop, "lower")
+    if lower is not None:
+        attrs["lower_color"], attrs["lower_color_score"] = lower[0], float(lower[1])
+    return attrs
+
+
+def _padded_crop(frame: np.ndarray, x1: int, y1: int, x2: int, y2: int) -> np.ndarray:
+    """Crop diperbesar dari titik tengah box, minimal 120x240 px. Satu-satunya
+    sumber thumbnail tracklet — menggantikan snapshot-per-deteksi dan
+    profile-thumbnail terpisah yang ada sebelum Fase 2."""
+    fh, fw = frame.shape[:2]
+    cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+    half_w = max((x2 - x1) // 2 + 30, 60)
+    half_h = max((y2 - y1) // 2 + 40, 120)
+    x1c = max(0, cx - half_w)
+    y1c = max(0, cy - half_h)
+    x2c = min(fw, cx + half_w)
+    y2c = min(fh, cy + half_h)
+    return frame[y1c:y2c, x1c:x2c].copy()
 
 
 class IdentityDB:
+    """Identity database berbasis tracklet untuk live stream pipeline.
+    Lihat plan/07-fase2-detail.md untuk lifecycle lengkap. Bukan dipakai oleh
+    process_video() — itu pakai _LegacyIdentityDB di bawah."""
+
+    def __init__(
+        self, reid_threshold: float, camera_id: str = "",
+        par_extractor=None,
+        *, w_reid: float = W_REID, w_time: float = W_TIME, w_cam: float = W_CAM,
+    ) -> None:
+        self.threshold  = reid_threshold  # dipakai sebagai ASSOC_THRESHOLD
+        self.w_reid     = w_reid
+        self.w_time     = w_time
+        self.w_cam      = w_cam
+        self._camera_id = camera_id
+
+        # Bank: name → list of {"emb": np.ndarray, "last_match": datetime, "cam_id": str}
+        self._embeddings:      dict[str, list]                  = {}
+        self._display_to_label: dict[str, str]                  = {}
+        self._track_to_name:   dict[tuple[str, int], str]       = {}
+        self._name_to_owner:   dict[str, tuple[str, int]]       = {}  # dipakai to_records()/identities saja
+        self._active_tracks:   dict[str, set[int]]              = {}
+        self._last_interval:   dict[str, tuple[datetime, datetime]] = {}
+        self._last_cam:        dict[str, str]                   = {}
+        self._camera_group:    dict[str, "str | int | None"]    = {}
+
+        self._open: dict[tuple[str, int], Tracklet] = {}
+
+        self._count = 0
+        self._par = par_extractor  # PARExtractor | None — dipakai Fase 3
+
+    def _key(self, track_id: int, cam_id: str) -> tuple[str, int]:
+        return (cam_id or self._camera_id, track_id)
+
+    def _new_names(self, cam_id: str = "") -> tuple[str, str]:
+        """Returns (display_name, unique_label). Label menyertakan camera_id
+        dan tanggal agar unik di seluruh kamera (ADR-001 — tidak menembus hari)."""
+        self._count += 1
+        today   = datetime.now().strftime("%Y%m%d")
+        display = f"Unknown #{self._count}"
+        cam     = cam_id or self._camera_id or "cam"
+        label   = f"Unknown #{self._count}@{cam}@{today}"
+        return display, label
+
+    # ── Observe / close (lifecycle tracklet) ────────────────────────────────
+
+    def observe(
+        self, cam_id: str, track_id: int, emb: "np.ndarray | None", quality: float,
+        conf: float, frame: "np.ndarray | None", x1: int, y1: int, x2: int, y2: int,
+        ts: datetime,
+    ) -> None:
+        """Kumpulkan bukti untuk tracklet ini. Dipanggil tiap box per siklus
+        batch, termasuk box yang gagal quality gate (emb None) — itu tetap
+        menaikkan n_det dan last_seen tapi tidak menambah sample."""
+        key = self._key(track_id, cam_id)
+        tl = self._open.get(key)
+        if tl is None:
+            tl = Tracklet(cam_id=cam_id or self._camera_id, track_id=track_id,
+                           started_at=ts, last_seen=ts)
+            self._open[key] = tl
+        tl.last_seen = ts
+        tl.n_det += 1
+        if conf > tl.best_conf and frame is not None:
+            tl.best_conf = conf
+            tl.best_crop = _padded_crop(frame, x1, y1, x2, y2)
+            tl.best_x, tl.best_y = foot_point_xyxy(x1, y1, x2, y2)
+        # Titik kaki DISIMPAN TIAP OBSERVE, bukan cuma sampel best_conf — ini
+        # yang membuat "garis lintasan" beneran punya beberapa titik untuk
+        # disambung, bukan cuma satu titik ringkasan per tracklet.
+        if len(tl.positions) >= TRACKLET_MAX_POSITIONS:
+            tl.positions.pop(0)
+        tl.positions.append(foot_point_xyxy(x1, y1, x2, y2))
+        if emb is not None:
+            self._add_sample(tl, emb, quality)
+
+    @staticmethod
+    def _add_sample(tl: Tracklet, emb: np.ndarray, quality: float) -> None:
+        if len(tl.samples) < TRACKLET_MAX_SAMPLES:
+            tl.samples.append((emb, quality))
+            return
+        worst_idx = min(range(len(tl.samples)), key=lambda i: tl.samples[i][1])
+        if quality > tl.samples[worst_idx][1]:
+            tl.samples[worst_idx] = (emb, quality)
+
+    def update_active(self, cam_id: str, track_ids: "set[int]") -> None:
+        """Dipanggil tiap siklus batch. Update tracklet mana yang masih 'hidup'
+        (missing=0) dan mana yang mulai hilang (missing += 1)."""
+        self._active_tracks[cam_id] = set(track_ids)
+        for key, tl in self._open.items():
+            if key[0] != cam_id:
+                continue
+            tl.missing = 0 if tl.track_id in track_ids else tl.missing + 1
+
+    def close_expired(self, cam_id: str, now: "datetime | None" = None) -> list[dict]:
+        """Tutup tracklet kamera ini yang track-nya hilang >= TRACKLET_GAP_CYCLES
+        siklus, atau yang sudah melebihi TRACKLET_MAX_DURATION (lalu langsung
+        buka tracklet baru dengan key sama — track-nya masih hidup)."""
+        now = now or datetime.now(timezone.utc)
+        closed: list[dict] = []
+        for key in [k for k in list(self._open) if k[0] == cam_id]:
+            tl = self._open[key]
+            gap_expired      = tl.missing >= TRACKLET_GAP_CYCLES
+            duration_expired = (now - tl.started_at).total_seconds() > TRACKLET_MAX_DURATION
+            if not (gap_expired or duration_expired):
+                continue
+            del self._open[key]
+            result = self._resolve_tracklet(tl)
+            if result is not None:
+                closed.append(result)
+            if duration_expired and not gap_expired:
+                self._open[key] = Tracklet(cam_id=tl.cam_id, track_id=tl.track_id,
+                                            started_at=now, last_seen=now)
+        return closed
+
+    def close_all(self, cam_id: "str | None" = None) -> list[dict]:
+        """Flush semua tracklet terbuka — dipakai saat stream stop, reconnect
+        kamera, atau reset tengah malam."""
+        keys = [k for k in list(self._open) if cam_id is None or k[0] == cam_id]
+        closed: list[dict] = []
+        for key in keys:
+            tl = self._open.pop(key)
+            result = self._resolve_tracklet(tl)
+            if result is not None:
+                closed.append(result)
+        return closed
+
+    # ── Asosiasi ─────────────────────────────────────────────────────────────
+
+    def _p_transition(self, cam_a: str, cam_b: str) -> float:
+        if cam_a == cam_b:
+            return 1.0
+        ga = self._camera_group.get(cam_a)
+        gb = self._camera_group.get(cam_b)
+        if ga is None or gb is None:
+            return 0.5
+        return 0.8 if ga == gb else 0.3
+
+    def set_camera_groups(self, group_by_camera: "dict[str, str | int | None]") -> None:
+        """Dipanggil sekali saat stream/start. Sumbernya cameras.group_id yang
+        sudah difetch StreamManager — tidak perlu HTTP call terpisah."""
+        self._camera_group = dict(group_by_camera)
+
+    def associate(self, emb: np.ndarray, tl: Tracklet) -> tuple["str | None", float]:
+        """score = w_reid*cos + w_time*f_time(dt) + w_cam*P_transition(cam_prev,cam_now).
+        Constraint keras: dua tracklet yang interval waktunya beririsan tidak
+        pernah dianggap orang yang sama (menggantikan collision guard lama)."""
+        interval = (tl.started_at, tl.last_seen)
+        best_name, best_score = None, -1.0
+        second_score = -1.0
+        for name, bank in self._embeddings.items():
+            other = self._last_interval.get(name)
+            if other is not None and _overlaps(interval, other):
+                continue
+            cos      = max(float(np.dot(emb, e["emb"])) for e in bank)
+            last_cam = self._last_cam.get(name, tl.cam_id)
+            other_end = other[1] if other is not None else tl.started_at
+            dt = (tl.started_at - other_end).total_seconds()
+            ft = _f_time(dt)
+            pc = self._p_transition(last_cam, tl.cam_id)
+            score = self.w_reid * cos + self.w_time * ft + self.w_cam * pc
+            if _debug_reid():
+                print(f"[assoc.cmp] {tl.cam_id}/t{tl.track_id} vs {name!r}: "
+                      f"cos={cos:.3f} dt={dt:.0f}s f_time={ft:.3f} "
+                      f"cam={last_cam}->{tl.cam_id} p_cam={pc:.2f} score={score:.3f}")
+            if score > best_score:
+                second_score = best_score
+                best_score, best_name = score, name
+            elif score > second_score:
+                second_score = score
+
+        margin = best_score - second_score
+        if best_name is not None and best_score >= self.threshold and margin >= MIN_MARGIN:
+            return best_name, best_score
+        return None, best_score
+
+    def _resolve_tracklet(self, tl: Tracklet) -> "dict | None":
+        if not tl.samples:
+            return None  # tidak ada bukti visual yang layak — buang, tidak ada POST
+
+        mean = np.mean([e for e, _ in tl.samples], axis=0)
+        emb  = mean / (np.linalg.norm(mean) + 1e-8)
+
+        name, score = self.associate(emb, tl)
+        is_new = name is None
+        if is_new:
+            name, label = self._new_names(tl.cam_id)
+            self._embeddings[name]       = [{"emb": emb, "last_match": tl.last_seen, "cam_id": tl.cam_id}]
+            self._display_to_label[name] = label
+        else:
+            self._bank_update(name, emb, tl.cam_id)
+            label = self._display_to_label.get(name, name)
+
+        key = self._key(tl.track_id, tl.cam_id)
+        self._track_to_name[key]  = name
+        self._name_to_owner[name] = key
+        self._last_interval[name] = (tl.started_at, tl.last_seen)
+        self._last_cam[name]      = tl.cam_id
+
+        ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        # score >= threshold tapi tetap NEW berarti ditolak gate margin (MIN_MARGIN),
+        # bukan skor kurang — dua kandidat teratas terlalu dekat untuk dipercaya.
+        if is_new and score >= self.threshold:
+            reason = f"score={score:.3f} >= thr, tapi margin top1/top2 < {MIN_MARGIN}"
+        elif is_new:
+            reason = f"score={score:.3f} < thr={self.threshold} (atau gallery kosong)"
+        else:
+            reason = f"score={score:.3f}"
+        print(f"[reid] {ts} {tl.cam_id}/t{tl.track_id} tracklet ditutup ({tl.n_det} det, {len(tl.samples)} sample) "
+              f"→ {'NEW' if is_new else 'MATCH'} {name!r}  ({reason})")
+
+        return {
+            "display_name": name,
+            "label":        label,
+            "is_new":       is_new,
+            "cam_id":       tl.cam_id,
+            "track_id":     tl.track_id,
+            "started_at":   tl.started_at,
+            "ended_at":     tl.last_seen,
+            "n_detections": tl.n_det,
+            "best_crop":    tl.best_crop,
+            "best_conf":    tl.best_conf,
+            "pos_x":        tl.best_x,
+            "pos_y":        tl.best_y,
+            "positions":    tl.positions,
+            "embedding":    emb,
+            "assoc_score":  score,
+            # PAR (Fase 3) TIDAK dihitung di sini — ~2.3s/crop akan menahan
+            # thread inferensi utama untuk SEMUA kamera. par_attrs() dipanggil
+            # nanti di worker background _PostQueue (backend_client.py).
+            "par":          self._par,
+        }
+
+
+    def _bank_update(self, name: str, emb: np.ndarray, cam_id: str) -> None:
+        # Aware UTC — harus konsisten dengan started_at/ended_at yang dipakai
+        # associate()/load_gallery(), kalau tidak prune_banks() crash saat
+        # membandingkan entry lokal (naive) dengan entry hasil load_gallery (aware).
+        bank = self._embeddings.get(name)
+        if not bank:
+            return
+        sims     = [float(np.dot(emb, e["emb"])) for e in bank]
+        best_idx = int(np.argmax(sims))
+        best_sim = sims[best_idx]
+        now = datetime.now(timezone.utc)
+
+        if best_sim >= BANK_MERGE_SIM:
+            merged = 0.9 * bank[best_idx]["emb"] + 0.1 * emb
+            bank[best_idx]["emb"]        = merged / (np.linalg.norm(merged) + 1e-8)
+            bank[best_idx]["last_match"] = now
+        else:
+            new_entry = {"emb": emb, "last_match": now, "cam_id": cam_id}
+            if len(bank) >= MAX_BANK_SIZE:
+                lru_idx = min(range(len(bank)), key=lambda i: bank[i]["last_match"])
+                bank[lru_idx] = new_entry
+            else:
+                bank.append(new_entry)
+
+    # ── Pemulihan gallery dari DB (§7) ───────────────────────────────────────
+
+    def load_gallery(self, entries: list[dict]) -> None:
+        """entries: [{person_id, person_label, camera_id, started_at, ended_at,
+        embedding}] — hasil GET /tracklets/gallery, maks 5 entri terbaru/orang
+        (sudah dibatasi backend). Dipanggil sekali saat stream/start. Hanya
+        tracklet hari ini yang dimuat — konsekuensi ADR-001."""
+        max_count = 0
+        for e in entries:
+            label   = e["person_label"]
+            display = label.split("@")[0]
+            m = re.match(r"Unknown #(\d+)$", display)
+            if m:
+                max_count = max(max_count, int(m.group(1)))
+
+            self._display_to_label[display] = label
+            bank = self._embeddings.setdefault(display, [])
+            emb_arr = np.asarray(e["embedding"], dtype=np.float32)
+            ended_at = e["ended_at"]
+            bank.append({"emb": emb_arr, "last_match": ended_at, "cam_id": e["camera_id"]})
+
+            prev = self._last_interval.get(display)
+            if prev is None or ended_at > prev[1]:
+                self._last_interval[display] = (e["started_at"], ended_at)
+                self._last_cam[display]      = e["camera_id"]
+
+        self._count = max(self._count, max_count)
+
+    # ── Lookup / maintenance ─────────────────────────────────────────────────
+
+    def label_of(self, track_id: int, cam_id: str = "") -> "str | None":
+        key     = self._key(track_id, cam_id)
+        display = self._track_to_name.get(key)
+        if display is None:
+            return None
+        return self._display_to_label.get(display, display)
+
+    def name_of(self, track_id: int, cam_id: str = "") -> "str | None":
+        return self._track_to_name.get(self._key(track_id, cam_id))
+
+    def prune_banks(self) -> int:
+        """Hapus entry stale dari bank embedding (jalankan sebelum reset harian)."""
+        removed = 0
+        now     = datetime.now(timezone.utc)
+        for name, bank in self._embeddings.items():
+            if len(bank) <= 1:
+                continue
+            fresh = [e for e in bank
+                     if (now - e["last_match"]).total_seconds() / 3600 < BANK_STALE_HOURS]
+            if not fresh:
+                fresh = [max(bank, key=lambda e: e["last_match"])]
+            removed += len(bank) - len(fresh)
+            self._embeddings[name] = fresh
+        return removed
+
+    def reset(self) -> None:
+        """Reset semua state setiap tengah malam. Panggil close_all() DULU
+        (lihat batch_processor.py) supaya tracklet yang masih terbuka tidak
+        hilang begitu saja — ini hanya defensive clear."""
+        self._open.clear()
+        self._embeddings.clear()
+        self._track_to_name.clear()
+        self._display_to_label.clear()
+        self._name_to_owner.clear()
+        self._active_tracks.clear()
+        self._last_interval.clear()
+        self._last_cam.clear()
+        self._count = 0
+
+    def to_records(self) -> list[IdentityRecord]:
+        records = []
+        for name in self._embeddings:
+            tids = [k[1] for k, n in self._track_to_name.items() if n == name]
+            records.append(IdentityRecord(name=name, track_ids=tids))
+        return records
+
+
+# ── Legacy: dipakai HANYA oleh process_video() (analisis file offline) ────────
+# Di luar cakupan Fase 2. Logika identik dengan sebelum Fase 2 — lihat
+# plan/07-fase2-detail.md untuk alasan kenapa dipisah dari IdentityDB di atas.
+
+EMBED_REFRESH      = 15
+MIN_ENROLL_FRAMES  = 2      # delayed enrollment: tunggu N frame berkualitas
+
+
+class _LegacyIdentityDB:
     def __init__(self, reid_threshold: float, camera_id: str = "",
                  par_extractor=None) -> None:
         self.threshold           = reid_threshold
         self._camera_id          = camera_id
-        # Bank: name → list of {"emb": np.ndarray, "last_match": datetime, "cam_id": str}
         self._embeddings:      dict[str, list] = {}
-        self._attr_gallery:    dict[str, "np.ndarray | None"] = {}  # PAR (disabled)
         self._track_to_name:   dict[int, str]        = {}
         self._frame_counter:   dict[int, int]        = {}
-        # Maps display_name → globally-unique label ("Unknown #1@c8@20260622")
-        # camera_id disertakan agar label tidak bentrok antar kamera di DB.
         self._display_to_label: dict[str, str]       = {}
-        # Pending buffer: key (cam_id, track_id) → [(emb, laplacian_var, crop), ...]
-        # Track yang belum mencapai MIN_ENROLL_FRAMES frame berkualitas disimpan di sini.
         self._pending:         dict                  = {}
         self._count = 0
-        self._par = par_extractor  # PARExtractor | None
-        self._color_gallery: dict[str, dict] = {}   # {"upper": str, "lower": str | None}
+        self._par = par_extractor
         self._name_to_owner:  dict[str, tuple]      = {}
-        self._ambiguous:      dict[str, dict]       = {}  # amb_id → entry (belum dikonfirmasi)
-        self._in_review:      set                   = set()  # key track yang sedang menunggu resolusi
-        self._active_tracks:  dict[str, set[int]]   = {}  # cam_id → set track_id aktif saat ini
-        self._last_top2_name: str | None            = None  # nama kandidat ke-2 (untuk logging)
+        self._active_tracks:  dict[str, set[int]]   = {}
+        self._last_top2_name: str | None            = None
 
     def _key(self, track_id: int, cam_id: str) -> tuple[str, int] | int:
         return (cam_id, track_id) if cam_id else track_id
 
     def _new_names(self, cam_id: str = "") -> tuple[str, str]:
-        """Returns (display_name, unique_label).
-        Label menyertakan camera_id dan tanggal agar unik di seluruh kamera."""
         self._count += 1
         today   = datetime.now().strftime("%Y%m%d")
         display = f"Unknown #{self._count}"
@@ -83,21 +506,16 @@ class IdentityDB:
     def _best_match(
         self, emb: np.ndarray, *, track_id=None, cam_id: str = "",
     ) -> tuple[str | None, float, str | None, float]:
-        """Returns (name_top1, sim_top1, verdict, sim_top2). verdict always None (pure OSNet).
-        Similarity per identitas = MAX similarity terhadap seluruh entry di banknya."""
         top1_name, top1_sim = None, -1.0
         top2_name, top2_sim = None, -1.0
         for name, bank in self._embeddings.items():
             best_e = max((float(np.dot(emb, e["emb"])) for e in bank), default=-1.0)
-            if _debug_reid():
-                ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                print(f"[reid.cmp] {ts} cam={cam_id} t{track_id} ↔ {name!r}  sim={best_e:.4f} (bank={len(bank)})")
             if best_e > top1_sim:
                 top2_sim, top2_name = top1_sim, top1_name
                 top1_sim, top1_name = best_e, name
             elif best_e > top2_sim:
                 top2_sim, top2_name = best_e, name
-        self._last_top2_name = top2_name   # simpan untuk logging di assign()
+        self._last_top2_name = top2_name
         return top1_name, top1_sim, None, top2_sim
 
     def assign(
@@ -105,174 +523,72 @@ class IdentityDB:
         *, quality: float = 1.0, debug_crop: "np.ndarray | None" = None,
         active_track_ids: "set[int] | None" = None,
     ) -> tuple[str | None, bool]:
-        """Assign identity; returns (display_name, is_new_identity).
-        Returns (None, False) jika track masih dalam delayed enrollment buffer."""
         key = self._key(track_id, cam_id)
         if key in self._track_to_name:
             return self._track_to_name[key], False
-        if key in self._in_review:
-            return None, False   # sedang menunggu resolusi operator
 
-        # ── Delayed enrollment buffer ──────────────────────────────────────────
         buf = self._pending.setdefault(key, [])
         buf.append((emb, quality))
         if len(buf) < MIN_ENROLL_FRAMES:
-            print(f"[reid] {cam_id}/t{track_id} buffering ({len(buf)}/{MIN_ENROLL_FRAMES})")
             return None, False
 
-        # Cukup frame — ambil embedding dengan Laplacian variance tertinggi
         best_entry = max(buf, key=lambda x: x[1])
         best_emb   = best_entry[0]
         del self._pending[key]
 
-        # ── Gallery matching dengan best embedding ─────────────────────────────
-        n_gallery = len(self._embeddings)
         name, sim, _, sim2 = self._best_match(best_emb, track_id=track_id, cam_id=cam_id)
-        top2_name = self._last_top2_name
-        margin    = sim - sim2
-        ts        = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        ts_fn     = datetime.now().strftime("%H%M%S_%f")
+        margin = sim - sim2
 
-        # Header baris log: waktu + lokasi + ringkasan gallery
-        if n_gallery == 0:
-            _hdr = f"[reid] {ts} {cam_id}/t{track_id} gallery=∅"
-        elif name is not None:
-            top2_str = f" 2nd={top2_name!r}@{sim2:.3f}" if top2_name else ""
-            _hdr = f"[reid] {ts} {cam_id}/t{track_id} gallery={n_gallery} top1={name!r}@{sim:.3f}{top2_str} margin={margin:.3f}"
-        else:
-            _hdr = f"[reid] {ts} {cam_id}/t{track_id} gallery={n_gallery}"
-
-        # Collision guard: cek intra-kamera dan lintas kamera.
-        # Identitas tidak boleh diklaim track baru selama track pemiliknya masih aktif,
-        # baik di kamera yang sama maupun kamera lain.
         if name is not None and sim >= self.threshold:
             owner = self._name_to_owner.get(name)
             if owner is not None and owner != key:
                 owner_cam, owner_tid = owner
-                if owner_cam == cam_id:
-                    owner_active = active_track_ids or set()
-                else:
-                    owner_active = self._active_tracks.get(owner_cam, set())
+                owner_active = active_track_ids or set() if owner_cam == cam_id \
+                    else self._active_tracks.get(owner_cam, set())
                 if owner_tid in owner_active:
-                    scope = "intra-cam" if owner_cam == cam_id else f"cross-cam({owner_cam})"
-                    print(f"{_hdr} → CONFLICT {scope} (owner t{owner_tid}) → NEW")
                     name = None
 
-        # ── 3-way decision ─────────────────────────────────────────────────────
         is_confident = name is not None and sim >= self.threshold and margin >= MIN_MARGIN
         is_ambiguous = name is not None and sim >= self.threshold and margin < MIN_MARGIN
 
-        if is_confident:
-            print(f"{_hdr} → MATCH ✓")
-            if _debug_reid() and debug_crop is not None:
-                safe = name.replace(" ", "_").replace("#", "")
-                fname = f"{cam_id}_t{track_id}_{ts_fn}_MATCH_{safe}.jpg"
-                DEBUG_CROPS_DIR.mkdir(parents=True, exist_ok=True)
-                cv2.imwrite(str(DEBUG_CROPS_DIR / fname), debug_crop)
+        if is_confident or is_ambiguous:
             self._track_to_name[key]  = name
             self._frame_counter[key]  = 0
             self._name_to_owner[name] = key
             self._bank_update(name, best_emb, cam_id, touch_only=True)
             return name, False
 
-        if is_ambiguous:
-            print(f"{_hdr} → AMBIGUOUS⚠ (margin tipis, auto-match ke top1 {name!r})")
-            self._track_to_name[key]  = name
-            self._frame_counter[key]  = 0
-            self._name_to_owner[name] = key
-            self._bank_update(name, best_emb, cam_id, touch_only=True)
-            return name, False
-
-        # NEW
         display, label = self._new_names(cam_id)
         self._embeddings[display]       = [{"emb": best_emb, "last_match": datetime.now(), "cam_id": cam_id}]
         self._display_to_label[display] = label
-        reason = f"sim={sim:.3f} < thr={self.threshold}" if name else "gallery kosong"
-        print(f"{_hdr} → NEW {display!r}  ({reason})")
-        if _debug_reid() and debug_crop is not None:
-            safe  = display.replace(" ", "_").replace("#", "")
-            fname = f"{cam_id}_t{track_id}_{ts_fn}_NEW_{safe}.jpg"
-            DEBUG_CROPS_DIR.mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(str(DEBUG_CROPS_DIR / fname), debug_crop)
         self._track_to_name[key]     = display
         self._frame_counter[key]     = 0
         self._name_to_owner[display] = key
         return display, True
 
-    def get_ambiguous_list(self) -> list[dict]:
-        return [
-            {k: v for k, v in e.items() if k != "emb"}
-            for e in self._ambiguous.values()
-        ]
-
-    def resolve_ambiguous(self, amb_id: str, action: str, *, target_label: str = "") -> bool:
-        """action: 'confirm' → merge ke kandidat; 'assign' → merge ke target_label;
-        'reject' → identitas baru."""
-        entry = self._ambiguous.pop(amb_id, None)
-        if entry is None:
-            return False
-        emb = entry["emb"]
-        ts  = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        # Hapus track dari antrian review agar bisa assign ulang
-        self._in_review.discard(self._key(entry["track_id"], entry["cam_id"]))
-
-        if action in ("confirm", "assign"):
-            if action == "confirm":
-                name = entry["candidate"]
-            else:
-                # Cari display_name berdasarkan label
-                name = next(
-                    (dn for dn, lbl in self._display_to_label.items() if lbl == target_label),
-                    None,
-                )
-                if name is None:
-                    print(f"[reid] {ts} resolve {amb_id} → ASSIGN FAILED: label {target_label!r} tidak ditemukan")
-                    return False
-            if name in self._embeddings:
-                self._bank_update(name, emb, entry["cam_id"])
-            else:
-                self._embeddings[name] = [{"emb": emb, "last_match": datetime.now(), "cam_id": entry["cam_id"]}]
-            print(f"[reid] {ts} resolve {amb_id} → {'CONFIRM' if action == 'confirm' else 'ASSIGN'} as {name!r}")
-        else:  # reject → new
-            display, label = self._new_names(entry["cam_id"])
-            self._embeddings[display]       = [{"emb": emb, "last_match": datetime.now(), "cam_id": entry["cam_id"]}]
-            self._display_to_label[display] = label
-            print(f"[reid] {ts} resolve {amb_id} → NEW {display!r}")
-        return True
-
     def _bank_update(self, name: str, emb: np.ndarray, cam_id: str, *, touch_only: bool = False) -> None:
-        """Perbarui bank embedding untuk `name` dengan embedding baru.
-        touch_only=True → hanya update last_match tanpa mengubah vektor (dipakai saat MATCH pertama kali)."""
         bank = self._embeddings.get(name)
         if not bank:
             return
-        # Cari entry paling mirip
         sims     = [float(np.dot(emb, e["emb"])) for e in bank]
         best_idx = int(np.argmax(sims))
         best_sim = sims[best_idx]
         now = datetime.now()
 
         if touch_only or best_sim >= BANK_MERGE_SIM:
-            # Update entry yang sudah ada
             if not touch_only:
                 merged = 0.9 * bank[best_idx]["emb"] + 0.1 * emb
                 bank[best_idx]["emb"] = merged / (np.linalg.norm(merged) + 1e-8)
             bank[best_idx]["last_match"] = now
         else:
-            # Sudut pandang baru — tambah entry
             new_entry = {"emb": emb, "last_match": now, "cam_id": cam_id}
             if len(bank) >= MAX_BANK_SIZE:
-                # LRU eviction: buang entry paling lama tidak jadi top-match
                 lru_idx = min(range(len(bank)), key=lambda i: bank[i]["last_match"])
                 bank[lru_idx] = new_entry
             else:
                 bank.append(new_entry)
-            ts = datetime.now().strftime("%H:%M:%S")
-            evict = " (evict LRU)" if len(bank) >= MAX_BANK_SIZE else ""
-            print(f"[reid.bank] {ts} {name!r} +angle cam={cam_id} nearest={best_sim:.3f} bank={len(bank)}{evict}")
 
     def label_of(self, track_id: int, cam_id: str = "") -> str | None:
-        """Returns the date-unique label for a track (for DB storage)."""
         key     = self._key(track_id, cam_id)
         display = self._track_to_name.get(key)
         if display is None:
@@ -288,19 +604,15 @@ class IdentityDB:
         name = self._track_to_name.get(key)
         if name is None or name not in self._embeddings:
             return
-        # Hanya update bank untuk track yang sudah CONFIDENT match (sudah punya nama)
         self._bank_update(name, emb, cam_id)
 
     def update_active(self, cam_id: str, track_ids: "set[int]") -> None:
-        """Dipanggil tiap siklus batch untuk update track yang aktif per kamera."""
         self._active_tracks[cam_id] = set(track_ids)
 
     def name_of(self, track_id: int, cam_id: str = "") -> str | None:
         return self._track_to_name.get(self._key(track_id, cam_id))
 
     def prune_banks(self) -> int:
-        """Hapus entry stale dari bank embedding (jalankan sebelum reset harian).
-        Returns jumlah entry yang dihapus."""
         removed = 0
         now     = datetime.now()
         for name, bank in self._embeddings.items():
@@ -312,25 +624,15 @@ class IdentityDB:
                 fresh = [max(bank, key=lambda e: e["last_match"])]
             removed += len(bank) - len(fresh)
             self._embeddings[name] = fresh
-        if removed:
-            ts = datetime.now().strftime("%H:%M:%S")
-            print(f"[reid.prune] {ts} pruned {removed} stale bank entries")
         return removed
 
     def reset(self) -> None:
-        """Reset semua state setiap tengah malam. _count direset ke 0 karena
-        _new_names() menyertakan tanggal di label sehingga tidak ada tabrakan
-        label lintas hari di tabel persons PostgreSQL."""
         self._embeddings.clear()
-        self._attr_gallery.clear()
-        self._color_gallery.clear()
         self._track_to_name.clear()
         self._frame_counter.clear()
         self._display_to_label.clear()
         self._pending.clear()
         self._name_to_owner.clear()
-        self._ambiguous.clear()
-        self._in_review.clear()
         self._active_tracks.clear()
         self._count = 0
 
@@ -346,17 +648,11 @@ class IdentityDB:
         return records
 
 
-# ── Geometry ──────────────────────────────────────────────────────────────────
-
-def _point_side(px: int, py: int, lx1: int, ly1: int, lx2: int, ly2: int) -> float:
-    return (lx2 - lx1) * (py - ly1) - (ly2 - ly1) * (px - lx1)
-
-def _is_in_side(v: float, in_sign: int) -> bool:
-    return v * in_sign >= 0
+# ── Geometry ────────────────────────────────────────────────────────────────
 
 def _foot_point(box) -> tuple[int, int]:
     x1, _, x2, y2 = map(int, box.xyxy[0])
-    return (x1 + x2) // 2, y2
+    return foot_point_xyxy(x1, 0, x2, y2)
 
 
 # ── Embedding ─────────────────────────────────────────────────────────────────
@@ -373,7 +669,6 @@ def _extract_embedding(
     x2, y2 = min(fw, x2), min(fh, y2)
     h, w = y2 - y1, x2 - x1
 
-    # ── Quality gate ──────────────────────────────────────────────────────────
     if h < QUALITY_MIN_H or w < QUALITY_MIN_W:
         return None
     if h / (w + 1e-6) < QUALITY_MIN_RATIO:
@@ -407,7 +702,7 @@ def _draw_line(frame: np.ndarray, p1: tuple, p2: tuple, in_sign: int) -> None:
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 100, 255), 2)
 
 
-def _draw_tracks(frame: np.ndarray, result, db: IdentityDB, crossed: set[int]) -> None:
+def _draw_tracks(frame: np.ndarray, result, db: "_LegacyIdentityDB", crossed: set[int]) -> None:
     boxes = result.boxes
     if boxes is None or boxes.id is None:
         return
@@ -452,7 +747,7 @@ def process_video(
         output_path = Path("output") / f"result_{input_path.stem}_processed.mp4"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    db          = IdentityDB(req.reid_threshold)
+    db          = _LegacyIdentityDB(req.reid_threshold)
     line_length = math.hypot(lp2[0] - lp1[0], lp2[1] - lp1[1]) or 1
 
     cap = cv2.VideoCapture(str(input_path))
@@ -477,8 +772,6 @@ def process_video(
         ok, frame = cap.read()
         if not ok:
             break
-
-        timestamp = frame_idx / fps
 
         results = detector.track(
             frame,
@@ -510,13 +803,13 @@ def process_video(
                         db.refresh(track_id, emb)
 
                 fx, fy    = _foot_point(box)
-                curr_side = _point_side(fx, fy, lp1[0], lp1[1], lp2[0], lp2[1])
+                curr_side = cross_side(fx, fy, lp1[0], lp1[1], lp2[0], lp2[1])
                 history   = side_history[track_id]
 
                 if len(history) > 0 and track_id not in counted_ids:
                     prev       = history[-1]
-                    prev_in    = _is_in_side(prev,      in_sign)
-                    curr_in    = _is_in_side(curr_side, in_sign)
+                    prev_in    = is_in_side(prev,      in_sign)
+                    curr_in    = is_in_side(curr_side, in_sign)
                     if not prev_in and curr_in:
                         count_in += 1
                         counted_ids.add(track_id)
@@ -529,7 +822,6 @@ def process_video(
                 history.append(curr_side)
                 track_last_frame[track_id] = frame_idx
 
-        # Buffer crossing
         for tid, last_f in list(track_last_frame.items()):
             if tid in active_ids or tid in counted_ids:
                 continue
@@ -545,7 +837,7 @@ def process_video(
             earliest = history[0]
             if abs(earliest) <= abs(last_side):
                 continue
-            if not _is_in_side(earliest, in_sign):
+            if not is_in_side(earliest, in_sign):
                 count_in += 1
             else:
                 count_out += 1

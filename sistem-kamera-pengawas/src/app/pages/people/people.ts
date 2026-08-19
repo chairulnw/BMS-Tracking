@@ -1,361 +1,390 @@
 import { Component, DestroyRef, inject, OnInit } from '@angular/core';
-import { NgClass, SlicePipe } from '@angular/common';
+import { NgClass } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
+import { ActivatedRoute, Router } from '@angular/router';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { interval } from 'rxjs';
-import { startWith, switchMap } from 'rxjs/operators';
+import { Subject } from 'rxjs';
+import { debounceTime, distinctUntilChanged } from 'rxjs/operators';
+import { environment } from '../../../environments/environment';
 import { AuthUrlPipe } from '../../pipes/auth-url.pipe';
 
-const API    = 'http://localhost:8002';
-const AI_API = 'http://localhost:8001';
+const API = environment.apiBaseUrl;
 
-interface BackendPerson {
-  id:                  number;
-  name:                string;
-  label:               string;
-  first_seen:          string | null;
-  last_seen:           string | null;
-  last_camera:         string | null;
-  best_thumbnail_url:  string | null;
-  is_known:            boolean;
-  enrollment_date:     string | null;
+// ── Feed mentah, dari GET /people/feed (level deteksi) — section DETEKSI ────
+
+interface FeedItem {
+  detection_id:  number;
+  person_id:     number | null;
+  person_label:  string | null;
+  person_name:   string | null;
+  is_known:      boolean;
+  camera_id:     string;
+  camera_name:   string | null;
+  timestamp:     string;
+  thumbnail_url: string | null;
+  tracklet_id:   number | null;
 }
 
-interface OccupancyRoom {
-  zone_id:           number;
-  zone_name:         string;
-  max_capacity:      number | null;
-  count_in:          number;
-  count_out:         number;
-  current_occupancy: number;
+interface FeedResponse {
+  items: FeedItem[];
+  total: number;
+  page:  number;
+  pages: number;
+  limit: number;
 }
 
-interface AmbiguousCase {
-  id:           string;
-  track_id:     number;
-  cam_id:       string;
-  candidate:    string;
-  sim_top1:     number;
-  sim_top2:     number;
-  margin:       number;
-  threshold:    number;
-  timestamp:    string;
-  snapshot_url: string | null;
+// ── Card ORANG — satu per person_id, dikelompokkan dari halaman DETEKSI saat
+// ini di frontend. Otomatis ada begitu person_id punya deteksi apa pun, gak
+// perlu dinamain dulu. "Beri Nama" ada di sini, bukan di card Deteksi.
+interface PersonCard {
+  person_id:     number;
+  person_name:   string | null;
+  person_label:  string | null;
+  is_known:      boolean;
+  thumbnail_url: string | null;
+  camera_name:   string | null;
+  camera_id:     string;
+  timestamp:     string;
+  tracklet_id:   number | null;
+  count:         number;
 }
 
-interface Movement {
-  timestamp:    string;
-  time:         string;
-  location:     string;
-  floor:        string;
-  note:         string;
-  camera:       string;
-  isCurrent:    boolean;
-  event_kind:   string | null;
-  direction:    string | null;
-  snapshot_url: string | null;
-  track_id:     number | null;
+interface Camera {
+  id:         number;
+  camera_id:  string | null;
+  name:       string;
+  group_name: string | null;
 }
 
-interface Person {
-  id:             number;
-  name:           string;
-  label:          string;
-  jabatan:        string;
-  status:         'terdaftar' | 'unknown';
-  lastCamera:     string;
-  thumbnailUrl:   string | null;
-  time:           string;
-  firstSeen:      string;
-  lastSeen:       string;
-  lastSeenRaw:    string | null;
-  enrollmentDate: string | null;
-  movements:      Movement[];
+interface CameraGroup {
+  name:    string;
+  cameras: Camera[];
 }
 
-type Filter = 'semua' | 'terdaftar' | 'unknown';
-type SortMode = 'terbaru' | 'nama';
+interface NameSuggestion {
+  person_id:     number;
+  name:          string;
+  jabatan:       string | null;
+  similarity:    number;
+  thumbnail_url: string | null;
+}
+
+// Sama persis dengan CLIP_COLORS di ai-service/app/par/par_service.py — value
+// yang dikirim ke backend harus cocok string yang disimpan PAR, apa adanya.
+// swatch = warna CSS approksimasi buat lingkaran pratinjau.
+const ATTR_COLORS: { value: string; label: string; swatch: string }[] = [
+  { value: 'black',  label: 'Hitam',      swatch: '#1a1a1a' },
+  { value: 'white',  label: 'Putih',      swatch: '#f5f5f5' },
+  { value: 'gray',   label: 'Abu-abu',    swatch: '#8a8a8a' },
+  { value: 'red',    label: 'Merah',      swatch: '#dc2626' },
+  { value: 'green',  label: 'Hijau',      swatch: '#16a34a' },
+  { value: 'blue',   label: 'Biru',       swatch: '#2563eb' },
+  { value: 'brown',  label: 'Coklat',     swatch: '#78350f' },
+  { value: 'yellow', label: 'Kuning',     swatch: '#eab308' },
+  { value: 'purple', label: 'Ungu',       swatch: '#9333ea' },
+  { value: 'pink',   label: 'Merah muda', swatch: '#ec4899' },
+];
+
+// Aksesoris — tiap entri bisa mewakili >1 atribut PAR mentah yang di-OR
+// (mis. tas = gabungan 3 jenis tas). Independen satu sama lain (AND).
+const ACCESSORIES: { id: string; label: string; attrNames: string[] }[] = [
+  { id: 'bag',        label: 'Tas',      attrNames: ['attach backpack', 'attach shoulder bag', 'attach hand bag'] },
+  { id: 'hat',        label: 'Topi',     attrNames: ['head hat'] },
+  { id: 'sunglasses', label: 'Kacamata', attrNames: ['head glasses'] },
+];
 
 @Component({
   selector: 'app-people',
   standalone: true,
-  imports: [NgClass, SlicePipe, AuthUrlPipe],
+  imports: [NgClass, AuthUrlPipe],
   templateUrl: './people.html',
   styleUrl: './people.css',
 })
 export class People implements OnInit {
   private http       = inject(HttpClient);
+  private router     = inject(Router);
+  private route      = inject(ActivatedRoute);
   private destroyRef = inject(DestroyRef);
 
-  activeFilter: Filter = 'semua';
-  sortMode: SortMode   = 'terbaru';
-  searchQuery  = '';
+  // ── Search & filter state ─────────────────────────────────────────────────
+  searchQuery = '';
+  selectedDate = this._todayISO();
 
-  feedOnline  = false;
-  editMode    = false;
-  editName    = '';
-  editJabatan = '';
+  cameras: Camera[] = [];
+  cameraGroups: CameraGroup[] = [];
+  selectedCameras: string[] = [];
+  showCameraPanel = false;
 
-  people: Person[]              = [];
-  selectedPerson: Person | null = null;
-  occupancy: OccupancyRoom[]    = [];
-  ambiguous: AmbiguousCase[]    = [];
-  assigningAmbId: string | null = null;
+  // Filter atribut (Fase 3, dari PAR) — kosong/null = tidak difilter.
+  upperColors: string[] = [];
+  lowerColors: string[] = [];
+  gender: 'male' | 'female' | null = null;
+  selectedAccessories: string[] = [];
+  showAttrPanel = false;
+  readonly attrColors  = ATTR_COLORS;
+  readonly accessories = ACCESSORIES;
 
-  // URL gambar besar di panel kanan — diperbarui via tombol "Lihat"
-  previewUrl: string | null = null;
-  // Index movement yang sedang di-preview (null = belum ada pilihan manual)
-  previewMvIdx: number | null = null;
+  // Appearance search ("Cari Serupa") — dipicu dari halaman investigasi.
+  similarTo: number | null = null;
 
-  renamingId  = -1;
-  renameInput = '';
+  // ── Section DETEKSI — raw, paginated, urut waktu ────────────────────────────
+  deteksi: FeedItem[] = [];
+  total = 0;
+  page  = 1;
+  pages = 1;
+  private readonly limit = 24;
 
-  selectedDate: string = this._todayISO();
+  // ── Section ORANG — dikelompokkan dari halaman DETEKSI saat ini ────────────
+  get orang(): PersonCard[] {
+    const byPerson = new Map<number, PersonCard>();
+    for (const item of this.deteksi) {
+      if (item.person_id == null) continue;
+      const existing = byPerson.get(item.person_id);
+      if (existing) {
+        existing.count++;
+      } else {
+        byPerson.set(item.person_id, {
+          person_id:     item.person_id,
+          person_name:   item.person_name,
+          person_label:  item.person_label,
+          is_known:      item.is_known,
+          thumbnail_url: item.thumbnail_url,
+          camera_name:   item.camera_name,
+          camera_id:     item.camera_id,
+          timestamp:     item.timestamp,
+          tracklet_id:   item.tracklet_id,
+          count:         1,
+        });
+      }
+    }
+    return Array.from(byPerson.values());
+  }
+
+  // ── "Beri nama" inline form — di card ORANG, bukan per-deteksi ─────────────
+  namingPersonId: number | null = null;
+  nameInput    = '';
+  jabatanInput = '';
+  nameSuggestions: NameSuggestion[] = [];
+
+  private search$ = new Subject<void>();
 
   ngOnInit(): void {
-    interval(5000).pipe(
-      startWith(0),
-      switchMap(() => this.http.get<BackendPerson[]>(`${API}/persons?date=${this.selectedDate}`)),
-      takeUntilDestroyed(this.destroyRef),
-    ).subscribe({
-      next:  records => this.syncPeople(records),
-      error: err     => console.error('[people] polling error:', err),
-    });
+    this._loadCameras();
 
-    interval(5000).pipe(
-      startWith(0),
-      switchMap(() => this.http.get<OccupancyRoom[]>(`${API}/occupancy?date=${this.selectedDate}`)),
-      takeUntilDestroyed(this.destroyRef),
-    ).subscribe({
-      next:  data => this.occupancy = data,
-      error: err  => console.error('[people] occupancy error:', err),
-    });
+    const qp = this.route.snapshot.queryParamMap.get('similar_to');
+    if (qp) this.similarTo = Number(qp);
 
-    // interval(5000).pipe(
-    //   startWith(0),
-    //   switchMap(() => this.http.get<AmbiguousCase[]>(`${AI_API}/stream/ambiguous`)),
-    //   takeUntilDestroyed(this.destroyRef),
-    // ).subscribe({
-    //   next:  data => this.ambiguous = data,
-    //   error: ()   => { /* AI service mungkin belum jalan */ },
-    // });
+    this.search$.pipe(
+      debounceTime(300),
+      distinctUntilChanged(),
+      takeUntilDestroyed(this.destroyRef),
+    ).subscribe(() => this._reload());
+
+    this._reload();
+  }
+
+  private _loadCameras(): void {
+    this.http.get<Camera[]>(`${API}/cameras`).subscribe({
+      next: cams => {
+        this.cameras = cams;
+        const byGroup = new Map<string, Camera[]>();
+        for (const cam of cams) {
+          const key = cam.group_name || 'Tanpa Grup';
+          if (!byGroup.has(key)) byGroup.set(key, []);
+          byGroup.get(key)!.push(cam);
+        }
+        this.cameraGroups = Array.from(byGroup.entries()).map(([name, cameras]) => ({ name, cameras }));
+      },
+      error: err => console.error('[people] cameras error:', err),
+    });
+  }
+
+  // ── Search bar ────────────────────────────────────────────────────────────
+
+  onSearchInput(event: Event): void {
+    this.searchQuery = (event.target as HTMLInputElement).value;
+    this.search$.next();
   }
 
   onDateChange(event: Event): void {
-    const val = (event.target as HTMLInputElement).value;
-    if (!val) return;
-    this.selectedDate  = val;
-    this.selectedPerson = null;
-    this.people        = [];
-    this.http.get<BackendPerson[]>(`${API}/persons?date=${this.selectedDate}`).subscribe({
-      next:  records => this.syncPeople(records),
-      error: err     => console.error('[people] date fetch error:', err),
-    });
-    this.http.get<OccupancyRoom[]>(`${API}/occupancy?date=${this.selectedDate}`).subscribe({
-      next:  data => this.occupancy = data,
-      error: err  => console.error('[people] occupancy date fetch error:', err),
-    });
+    this.selectedDate = (event.target as HTMLInputElement).value || this._todayISO();
+    this._reload();
   }
 
-  private syncPeople(records: BackendPerson[]): void {
-    const prevId = this.selectedPerson?.id;
+  // ── Kamera: checklist multi-select berkelompok ───────────────────────────
 
-    this.people = records.map(r => {
-      const existing = this.people.find(p => p.id === r.id);
-      return {
-        id:             r.id,
-        name:           r.name,
-        label:          r.label,
-        jabatan:        existing?.jabatan ?? '',
-        status:         r.is_known ? 'terdaftar' : 'unknown',
-        lastCamera:     r.last_camera ?? '—',
-        thumbnailUrl:   r.best_thumbnail_url ?? null,
-        time:           this._fmt(r.last_seen),
-        firstSeen:      this._fmtFull(r.first_seen),
-        lastSeen:       this._fmtFull(r.last_seen),
-        lastSeenRaw:    r.last_seen,
-        enrollmentDate: r.enrollment_date ?? null,
-        movements:      existing?.movements ?? [],
-      };
+  toggleCamera(camId: string): void {
+    this.selectedCameras = this.selectedCameras.includes(camId)
+      ? this.selectedCameras.filter(c => c !== camId)
+      : [...this.selectedCameras, camId];
+    this._reload();
+  }
+
+  isCameraSelected(camId: string): boolean {
+    return this.selectedCameras.includes(camId);
+  }
+
+  clearCameras(): void {
+    this.selectedCameras = [];
+    this._reload();
+  }
+
+  // ── Atribut: warna (multi/OR), gender (single), aksesoris (independen/AND) ──
+
+  toggleColor(kind: 'upper' | 'lower', value: string): void {
+    const arr  = kind === 'upper' ? this.upperColors : this.lowerColors;
+    const next = arr.includes(value) ? arr.filter(v => v !== value) : [...arr, value];
+    if (kind === 'upper') this.upperColors = next; else this.lowerColors = next;
+    this._reload();
+  }
+
+  isColorSelected(kind: 'upper' | 'lower', value: string): boolean {
+    return (kind === 'upper' ? this.upperColors : this.lowerColors).includes(value);
+  }
+
+  setGender(value: 'male' | 'female'): void {
+    this.gender = this.gender === value ? null : value;
+    this._reload();
+  }
+
+  toggleAccessory(id: string): void {
+    this.selectedAccessories = this.selectedAccessories.includes(id)
+      ? this.selectedAccessories.filter(a => a !== id)
+      : [...this.selectedAccessories, id];
+    this._reload();
+  }
+
+  isAccessorySelected(id: string): boolean {
+    return this.selectedAccessories.includes(id);
+  }
+
+  get hasAttrFilter(): boolean {
+    return this.upperColors.length > 0 || this.lowerColors.length > 0
+      || this.gender !== null || this.selectedAccessories.length > 0;
+  }
+
+  get activeAttrFilterCount(): number {
+    return this.upperColors.length + this.lowerColors.length
+      + (this.gender !== null ? 1 : 0) + this.selectedAccessories.length;
+  }
+
+  clearAttrFilters(): void {
+    this.upperColors = [];
+    this.lowerColors = [];
+    this.gender = null;
+    this.selectedAccessories = [];
+    this._reload();
+  }
+
+  clearSimilarTo(): void {
+    this.similarTo = null;
+    this.router.navigate([], { relativeTo: this.route, queryParams: {} });
+    this._reload();
+  }
+
+  // ── Muat data ─────────────────────────────────────────────────────────────
+
+  private _reload(): void {
+    this.page = 1;
+    this._loadFeed();
+  }
+
+  private _loadFeed(): void {
+    const params = new URLSearchParams({
+      page:  String(this.page),
+      limit: String(this.limit),
+      from:  this.selectedDate,
+      to:    this.selectedDate,
     });
-
-    if (prevId != null) {
-      this.selectedPerson =
-        this.people.find(p => p.id === prevId) ?? this.people[0] ?? null;
-    } else {
-      this.selectedPerson = this.people[0] ?? null;
-      this.previewUrl     = this.selectedPerson?.thumbnailUrl ?? null;
+    if (this.searchQuery)            params.set('q', this.searchQuery);
+    if (this.selectedCameras.length) params.set('camera_id', this.selectedCameras.join(','));
+    if (this.upperColors.length)     params.set('upper_color', this.upperColors.join(','));
+    if (this.lowerColors.length)     params.set('lower_color', this.lowerColors.join(','));
+    if (this.gender)                 params.set('gender', this.gender);
+    if (this.similarTo != null)      params.set('similar_to', String(this.similarTo));
+    for (const acc of this.accessories) {
+      if (this.selectedAccessories.includes(acc.id)) params.append('attrs', acc.attrNames.join(','));
     }
 
-    if (this.selectedPerson) {
-      this._fetchMovements(this.selectedPerson);
-    }
-  }
-
-  // ── Inline rename ────────────────────────────────────────────────────────────
-
-  startRename(person: Person, event: Event): void {
-    event.stopPropagation();
-    this.renamingId  = person.id;
-    this.renameInput = person.name;
-  }
-
-  confirmRename(person: Person, event: Event): void {
-    event.stopPropagation();
-    const newName = this.renameInput.trim();
-    if (!newName || newName === person.name) { this.cancelRename(); return; }
-
-    this.http.patch<BackendPerson>(
-      `${API}/persons/${person.id}/rename`,
-      { new_name: newName },
-    ).subscribe({
-      next: updated => {
-        person.name   = updated.name;
-        person.status = updated.is_known ? 'terdaftar' : 'unknown';
-        if (this.selectedPerson?.id === person.id) {
-          this.selectedPerson.name   = updated.name;
-          this.selectedPerson.status = person.status;
-        }
-        this.cancelRename();
+    this.http.get<FeedResponse>(`${API}/people/feed?${params}`).subscribe({
+      next: res => {
+        this.deteksi = res.items;
+        this.total   = res.total;
+        this.pages   = res.pages;
       },
-      error: err => { console.error('[people] rename error:', err); this.cancelRename(); },
+      error: err => console.error('[people] feed error:', err),
     });
   }
 
-  // ── Ambiguous ReID resolution ────────────────────────────────────────────────
+  goToPage(p: number): void {
+    if (p < 1 || p > this.pages) return;
+    this.page = p;
+    this._loadFeed();
+  }
 
-  resolveAmbiguous(amb: AmbiguousCase, action: 'confirm' | 'reject'): void {
-    this.http.post<{ status: string }>(
-      `${AI_API}/stream/ambiguous/${amb.id}/resolve?action=${action}`, {}
-    ).subscribe({
-      next:  () => this._removeAmb(amb.id),
-      error: err => console.error('[people] resolve error:', err),
+  get pageNumbers(): number[] {
+    return Array.from({ length: this.pages }, (_, i) => i + 1);
+  }
+
+  // ── Navigasi ke Person Investigation ─────────────────────────────────────────
+
+  openPerson(personId: number): void {
+    if (this.namingPersonId === personId) return; // form nama sedang terbuka, jangan navigasi
+    this.router.navigate(['/people', personId]);
+  }
+
+  // ── "Beri nama" inline, di card ORANG ────────────────────────────────────────
+
+  startNaming(card: PersonCard, event: Event): void {
+    event.stopPropagation();
+    this.namingPersonId = card.person_id;
+    this.nameInput    = '';
+    this.jabatanInput = '';
+    this.nameSuggestions = [];
+    this.http.get<NameSuggestion[]>(`${API}/persons/${card.person_id}/name-suggestions`).subscribe({
+      next:  s => this.nameSuggestions = s,
+      // Diam-diam gagal — saran nama itu pemanis, bukan syarat mengisi form.
+      error: () => {},
     });
   }
 
-  assignAmbiguous(amb: AmbiguousCase, person: Person): void {
-    this.http.post<{ status: string }>(
-      `${AI_API}/stream/ambiguous/${amb.id}/resolve?action=assign&target=${encodeURIComponent(person.label)}`, {}
-    ).subscribe({
-      next:  () => this._removeAmb(amb.id),
-      error: err => console.error('[people] assign error:', err),
+  pickSuggestion(s: NameSuggestion, event: Event): void {
+    event.stopPropagation();
+    this.nameInput    = s.name;
+    this.jabatanInput = s.jabatan ?? '';
+  }
+
+  cancelNaming(event?: Event): void {
+    event?.stopPropagation();
+    this.namingPersonId = null;
+    this.nameSuggestions = [];
+  }
+
+  confirmNaming(card: PersonCard, event: Event): void {
+    event.stopPropagation();
+    const name = this.nameInput.trim();
+    if (!name) { this.cancelNaming(); return; }
+
+    this.http.patch(`${API}/persons/${card.person_id}`, {
+      name,
+      jabatan: this.jabatanInput.trim() || null,
+    }).subscribe({
+      next: () => {
+        this.namingPersonId = null;
+        this._loadFeed();
+      },
+      error: err => { console.error('[people] beri nama error:', err); this.cancelNaming(); },
     });
   }
-
-  toggleAssignPicker(ambId: string): void {
-    this.assigningAmbId = this.assigningAmbId === ambId ? null : ambId;
-  }
-
-  private _removeAmb(ambId: string): void {
-    this.ambiguous     = this.ambiguous.filter(a => a.id !== ambId);
-    this.assigningAmbId = null;
-  }
-
-  ambSnapshotUrl(amb: AmbiguousCase): string {
-    return `${AI_API}/stream/ambiguous/${amb.id}/snapshot`;
-  }
-
-  cancelRename(): void {
-    this.renamingId  = -1;
-    this.renameInput = '';
-  }
-
-  // ── Camera overlay edit ──────────────────────────────────────────────────────
-
-  openEdit(): void {
-    if (!this.selectedPerson) return;
-    this.editName    = this.selectedPerson.name;
-    this.editJabatan = this.selectedPerson.jabatan;
-    this.editMode    = true;
-  }
-
-  saveEdit(): void {
-    if (!this.selectedPerson) return;
-    const newName = this.editName.trim() || this.selectedPerson.name;
-
-    if (newName !== this.selectedPerson.name) {
-      this.http.patch<BackendPerson>(
-        `${API}/persons/${this.selectedPerson.id}/rename`,
-        { new_name: newName },
-      ).subscribe({ error: err => console.error('[people] rename error:', err) });
-    }
-
-    this.selectedPerson.name    = newName;
-    this.selectedPerson.jabatan = this.editJabatan.trim();
-    if (this.selectedPerson.jabatan) this.selectedPerson.status = 'terdaftar';
-    this.editMode = false;
-  }
-
-  cancelEdit(): void { this.editMode = false; }
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
 
-  get filteredPeople(): Person[] {
-    const filtered = this.people.filter(p => {
-      const matchFilter = this.activeFilter === 'semua' || p.status === this.activeFilter;
-      const matchSearch = p.name.toLowerCase().includes(this.searchQuery.toLowerCase());
-      return matchFilter && matchSearch;
-    });
-
-    return filtered.sort((a, b) => {
-      if (this.sortMode === 'nama') return a.name.localeCompare(b.name);
-      return (b.lastSeenRaw ?? '').localeCompare(a.lastSeenRaw ?? '');
-    });
+  cameraName(camera_id: string): string {
+    return this.cameras.find(c => c.camera_id === camera_id)?.name ?? camera_id;
   }
 
-  get semualCount(): number    { return this.people.length; }
-  get terdaftarCount(): number { return this.people.filter(p => p.status === 'terdaftar').length; }
-  get unknownCount(): number   { return this.people.filter(p => p.status === 'unknown').length; }
-
-  setFilter(f: Filter): void { this.activeFilter = f; }
-
-  toggleSort(): void {
-    this.sortMode = this.sortMode === 'terbaru' ? 'nama' : 'terbaru';
-  }
-
-  selectPerson(person: Person): void {
-    if (this.renamingId !== -1) return;
-    this.selectedPerson = person;
-    this.previewUrl     = person.thumbnailUrl;
-    this.previewMvIdx   = null;
-    this.editMode       = false;
-    this._fetchMovements(person);
-  }
-
-  viewSnapshot(mv: Movement, idx: number, event: Event): void {
-    event.stopPropagation();
-    if (!mv.snapshot_url) return;
-    this.previewMvIdx = idx;
-    this.previewUrl   = mv.snapshot_url;
-  }
-
-  private _fetchMovements(person: Person): void {
-    this.http.get<Movement[]>(
-      `${API}/persons/${person.id}/movements?date=${this.selectedDate}`
-    ).subscribe({
-      next: raw => {
-        const mvs = raw.map(mv => ({ ...mv, time: this._fmt(mv.timestamp) }));
-        person.movements = mvs;
-        if (this.selectedPerson?.id === person.id) {
-          this.selectedPerson.movements = mvs;
-          // Jangan timpa pilihan manual user
-          if (this.previewMvIdx === null) {
-            const current = mvs.find(m => m.isCurrent);
-            this.previewUrl = current?.snapshot_url ?? person.thumbnailUrl ?? null;
-          }
-        }
-      },
-      error: err => console.error('[people] movements error:', err),
-    });
-  }
-
-  get dateLabel(): string {
-    const d = new Date(this.selectedDate + 'T00:00:00');
-    return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
-  }
-
-  onSearch(event: Event): void {
-    this.searchQuery = (event.target as HTMLInputElement).value;
+  personBadge(card: PersonCard): string {
+    return `P-${card.person_id}`;
   }
 
   private _todayISO(): string {
@@ -363,12 +392,12 @@ export class People implements OnInit {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }
 
-  private _fmt(iso: string | null): string {
+  fmtTime2(iso: string | null): string {
     if (!iso) return '—';
     return new Date(iso).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
   }
 
-  private _fmtFull(iso: string | null): string {
+  fmtDateTime(iso: string | null): string {
     if (!iso) return '—';
     return new Date(iso).toLocaleString('id-ID', { dateStyle: 'short', timeStyle: 'short' });
   }

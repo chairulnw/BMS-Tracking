@@ -3,8 +3,9 @@ import { NgClass } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { forkJoin } from 'rxjs';
 import { AuthUrlPipe } from '../../pipes/auth-url.pipe';
+import { environment } from '../../../environments/environment';
 
-const API = 'http://localhost:8002';
+const API = environment.apiBaseUrl;
 
 interface Camera {
   id:                 number;

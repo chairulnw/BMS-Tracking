@@ -641,15 +641,68 @@
 
 .td-evidence { width: 60px; }
 
+.evidence-btn {
+  position: relative;
+  display: block;
+  width: 48px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+}
+
 .evidence-thumb {
   width: 48px;
   height: 32px;
   object-fit: cover;
   border-radius: 4px;
   background: #000;
+  display: block;
 }
 
+.evidence-play {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: rgba(0,0,0,0.25);
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.evidence-btn:hover .evidence-play { opacity: 1; }
+
 .evidence-none { color: #4B5563; }
+
+/* ── Clip player ──────────────────────────────────────────────────────────── */
+
+.clip-player {
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.clip-player-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: #141D2B;
+  font-size: 12px;
+  color: #D1D5DC;
+}
+
+.clip-video {
+  display: block;
+  width: 100%;
+  max-height: 360px;
+  background: #000;
+}
 
 .dir-badge {
   font-size: 10px;

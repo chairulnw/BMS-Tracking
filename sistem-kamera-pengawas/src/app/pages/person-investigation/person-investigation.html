@@ -1,0 +1,173 @@
+<div class="page">
+
+  <button class="back-btn" (click)="goBack()">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+      <path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    Kembali
+  </button>
+
+  @if (loading) {
+    <div class="card"><div class="td-empty">Memuat...</div></div>
+  } @else if (notFound || !person) {
+    <div class="card"><div class="td-empty">Orang tidak ditemukan.</div></div>
+  } @else {
+
+    <!-- ── Header identity ──────────────────────────────────────── -->
+    <div class="card header-card">
+      <div class="header-thumb">
+        @if (person.best_thumbnail_url) {
+          <img [src]="person.best_thumbnail_url | authUrl" alt="{{ person.name }}" />
+        } @else {
+          <div class="thumb-placeholder">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="8" r="4" stroke="#6A7282" stroke-width="1.4"/>
+              <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke="#6A7282" stroke-width="1.4" stroke-linecap="round"/>
+            </svg>
+          </div>
+        }
+      </div>
+
+      @if (!editMode) {
+        <div class="header-info">
+          <div class="header-name-row">
+            <span class="header-name">{{ person.name }}</span>
+            <span [ngClass]="['status-dot', person.is_known ? 'status-dot--known' : '']"></span>
+          </div>
+          <div class="header-jabatan">{{ person.jabatan || '—' }}</div>
+          <div class="header-meta">
+            Terakhir: {{ person.last_camera_name || person.last_camera || '—' }} · {{ fmtLastSeen(person.last_seen) }}
+            · {{ person.observation_count }} observasi
+          </div>
+        </div>
+        <button class="btn-ghost" (click)="openEdit()">Ubah nama</button>
+      } @else {
+        <div class="header-edit-form">
+          <div class="edit-field">
+            <label class="edit-label">Nama</label>
+            <input class="edit-input" type="text" [value]="editName"
+              (input)="editName = $any($event.target).value" />
+          </div>
+          <div class="edit-field">
+            <label class="edit-label">Jabatan</label>
+            <input class="edit-input" type="text" [value]="editJabatan"
+              (input)="editJabatan = $any($event.target).value" />
+          </div>
+          <div class="edit-actions">
+            <button class="btn-batal" (click)="cancelEdit()">Batal</button>
+            <button class="btn-simpan" (click)="saveEdit()">Simpan</button>
+          </div>
+        </div>
+      }
+    </div>
+
+    <!-- ── Tab bar ──────────────────────────────────────────────────────── -->
+    <div class="tab-bar">
+      <button [ngClass]="['tab-btn', activeTab === 'timeline' ? 'tab-btn--active' : '']"
+        (click)="selectTab('timeline')">Timeline</button>
+      <button [ngClass]="['tab-btn', activeTab === 'pergerakan' ? 'tab-btn--active' : '']"
+        (click)="selectTab('pergerakan')">Pergerakan</button>
+      <button [ngClass]="['tab-btn', activeTab === 'durasi' ? 'tab-btn--active' : '']"
+        (click)="selectTab('durasi')">Durasi</button>
+    </div>
+
+    @if (activeTab === 'timeline') {
+      <div class="card">
+        @for (group of dateGroups; track group.dateLabel) {
+          <div class="date-group">
+            <div class="date-heading">{{ group.dateLabel }}</div>
+            @for (bucket of group.buckets; track bucket.label) {
+              <div class="bucket-row">
+                <div class="bucket-label">{{ bucket.label }}</div>
+                <div class="bucket-cards">
+                  @for (item of bucket.items; track item.detection_id) {
+                    <div class="snap-card" (click)="openFootage(item, $event)" title="Buka footage">
+                      <div class="snap-thumb">
+                        @if (item.thumbnail_url) {
+                          <img [src]="item.thumbnail_url | authUrl" alt="snapshot" />
+                        } @else {
+                          <div class="thumb-placeholder"></div>
+                        }
+                        <span class="snap-clock">{{ fmtClock(item.timestamp) }}</span>
+                      </div>
+                      <div class="snap-cam">{{ item.camera_name || item.camera_id }}</div>
+                    </div>
+                  }
+                </div>
+              </div>
+            }
+          </div>
+        } @empty {
+          <div class="td-empty">Belum ada deteksi untuk orang ini.</div>
+        }
+      </div>
+    }
+
+    @if (activeTab === 'pergerakan') {
+      <div class="card">
+        <div class="subtab-bar">
+          <button type="button" [ngClass]="['subtab-btn', pergerakanView === 'garis' ? 'subtab-btn--active' : '']"
+            (click)="pergerakanView = 'garis'">Garis Lintasan</button>
+          <button type="button" [ngClass]="['subtab-btn', pergerakanView === 'heatmap' ? 'subtab-btn--active' : '']"
+            (click)="pergerakanView = 'heatmap'">Heatmap</button>
+        </div>
+
+        <div class="overlay-grid">
+          @for (ov of cameraOverlays; track ov.camera_id) {
+            <div class="overlay-card">
+              <div class="overlay-frame">
+                <img [src]="ov.snapshotUrl" (load)="onOverlayImgLoad($event, ov)" alt="{{ ov.camera_name }}" />
+
+                @if (pergerakanView === 'garis') {
+                  @if (ov.linePoints) {
+                    <svg class="overlay-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+                      <polyline [attr.points]="ov.linePoints" fill="none" stroke="#E7000B" stroke-width="0.6" vector-effect="non-scaling-stroke" />
+                    </svg>
+                  }
+                  @for (pt of ov.points; track pt.timestamp) {
+                    <span class="overlay-dot" [ngClass]="dotClass(pt)"
+                      [ngStyle]="dotStyle(ov, pt)"
+                      title="{{ pt.direction }} · {{ fmtClock(pt.timestamp) }}"></span>
+                  }
+                } @else {
+                  @for (cell of ov.heatCells; track cell.left + cell.top) {
+                    <span class="heat-cell" [ngStyle]="{ left: cell.left, top: cell.top, width: cell.size, height: cell.size, opacity: cell.opacity }"></span>
+                  }
+                }
+              </div>
+              <div class="overlay-cam-name">{{ ov.camera_name }}</div>
+            </div>
+          } @empty {
+            <div class="td-empty">Belum ada data pergerakan untuk orang ini.</div>
+          }
+        </div>
+      </div>
+    }
+
+    @if (activeTab === 'durasi') {
+      <div class="card">
+        <div class="dwell-list">
+          @for (d of dwell; track d.zone_name) {
+            <div class="dwell-row">
+              <span class="dwell-zone">{{ d.zone_name }}</span>
+              <span class="dwell-time">{{ fmtDuration(d.dwell_seconds) }}</span>
+            </div>
+          } @empty {
+            <div class="td-empty">Belum ada data durasi zona untuk orang ini.</div>
+          }
+        </div>
+      </div>
+    }
+
+  }
+
+  @if (footageUrl) {
+    <div class="footage-overlay" (click)="closeFootage()">
+      <div class="footage-modal" (click)="$event.stopPropagation()">
+        <button class="footage-close" (click)="closeFootage()">✕</button>
+        <video [src]="footageUrl" controls autoplay></video>
+      </div>
+    </div>
+  }
+
+</div>

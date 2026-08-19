@@ -44,12 +44,17 @@ async def create_detection(
                     name, label, now, req.camera_id, thumbnail, now.date(),
                 )
             else:
-                # Update last_seen / last_camera / thumbnail if provided
+                # Update last_seen / last_camera / thumbnail — tapi hanya kalau deteksi
+                # ini benar-benar lebih baru. Tracklet lintas kamera ditutup lewat
+                # background post-queue dan bisa sampai ke sini gak berurutan waktu
+                # (tracklet panjang di kamera A bisa selesai diproses SETELAH tracklet
+                # pendek di kamera B yang mulainya belakangan) — tanpa guard ini,
+                # "terakhir dilihat" bisa jadi POST paling akhir, bukan yang paling baru.
                 person = await conn.fetchrow(
                     """
                     UPDATE persons
-                    SET last_seen   = $1,
-                        last_camera = $2,
+                    SET last_seen   = GREATEST(last_seen, $1),
+                        last_camera = CASE WHEN $1 >= last_seen THEN $2 ELSE last_camera END,
                         best_thumbnail_url = COALESCE($3, best_thumbnail_url)
                     WHERE id = $4
                     RETURNING *
