@@ -174,9 +174,20 @@ class _BackendClient:
         thumbnail_url: str | None = None,
         unique_label:  str | None = None,
         track_id:      int | None = None,
+        timestamp:     "object" = None,
     ) -> None:
         """unique_label adalah label date-aware (e.g. 'Unknown #1@20260622')
-        agar PostgreSQL tidak menggabungkan orang dari hari berbeda."""
+        agar PostgreSQL tidak menggabungkan orang dari hari berbeda.
+
+        `timestamp` HARUS waktu tracklet-nya beneran terjadi (mis. `ended_at`
+        dari _resolve_tracklet), bukan waktu POST ini dieksekusi. Post ini
+        jalan di worker _PostQueue di BELAKANG antrean — kalau timestamp-nya
+        `datetime.now()` diambil di sini, itu jam saat worker akhirnya
+        sempat proses jobnya, bisa telat beberapa detik dari kejadian
+        aslinya. Klip footage dicari berdasarkan timestamp ini (lihat
+        ai-service/app/routers/clips.py) — telat dikit saja bisa bikin
+        klip yang ditemukan BUKAN klip yang benar-benar merekam momen itu."""
+        ts = timestamp if timestamp is not None else datetime.now(timezone.utc)
         def _do() -> None:
             try:
                 requests.post(
@@ -185,7 +196,7 @@ class _BackendClient:
                         "person_name":   person_name,
                         "person_label":  unique_label or person_name,
                         "camera_id":     camera_id,
-                        "timestamp":     datetime.now(timezone.utc).isoformat(),
+                        "timestamp":     ts.astimezone(timezone.utc).isoformat(),
                         "confidence":    float(confidence),
                         "method":        method,
                         "thumbnail_url": thumbnail_url,

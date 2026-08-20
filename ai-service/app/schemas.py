@@ -1,7 +1,12 @@
 from pydantic import BaseModel
 
 DEFAULT_CONF_THRESHOLD = 0.6
-ASSOC_THRESHOLD        = 0.62  # dipakai juga sebagai default reid_threshold; lihat pipeline_service.py
+ASSOC_THRESHOLD        = 0.66  # dipakai juga sebagai default reid_threshold; lihat pipeline_service.py
+# Dituning (T2.12) via ai-service/evaluate_tuning.py terhadap sample3/output.csv:
+# 0.62 (lama) → false merge 2, false split 4 dari 5 orang GT (1 identitas
+# menggabungkan 4 orang berbeda). 0.66 → false merge 0, false split 3.
+# >0.66 (dicoba 0.68, 0.72) split makin parah tanpa mengurangi merge lagi
+# (sudah 0 dari 0.66). Lihat juga T_NEAR di pipeline_service.py.
 
 
 class LineConfig(BaseModel):

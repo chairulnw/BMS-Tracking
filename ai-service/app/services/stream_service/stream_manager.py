@@ -150,6 +150,11 @@ class StreamManager:
                     if slot._playlist:
                         slot._playlist_events = per_slot[slot.camera_id]
             has_playlist = any(s._playlist for s in self._slots)
+            # Mode file-playlist (evaluasi/testing): kamera-kamera memutar klip
+            # yang overlap waktu secara sengaja (simulasi lintas kamera), bukan
+            # indikasi orang beneran di 2 tempat — matikan hard constraint
+            # interval-overlap di associate(). RTSP live TIDAK ikut dimatikan.
+            shared_db.skip_interval_guard = has_playlist
             self._processor = BatchProcessor(
                 slots          = self._slots,
                 models         = models,

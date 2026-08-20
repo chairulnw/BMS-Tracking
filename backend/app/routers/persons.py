@@ -291,19 +291,34 @@ async def get_camera_points(person_id: int, request: Request) -> list[CameraPoin
                (elem.value->>0)::int AS x, (elem.value->>1)::int AS y,
                'TRACK' AS direction,
                t.started_at + (elem.ordinality - 1) * interval '1 second' AS timestamp
-        FROM tracklets t
+        FROM (
+            -- 10 baris lama (sebelum bug double-encode json.dumps() dibetulkan
+            -- di tracklets.py) nyimpen `positions` sebagai STRING JSON, bukan
+            -- array asli — jsonb_array_length() error keras kalau dipanggil ke
+            -- situ. CASE di sini masukin NULL buat baris begitu; jsonb_array_
+            -- elements(NULL) aman, otomatis 0 baris, gak perlu WHERE terpisah
+            -- yang bisa "ditembus" planner pas di-gabung UNION ALL (AND biasa
+            -- gak selalu short-circuit sebelum LATERAL function dipanggil).
+            SELECT camera_id, started_at, person_id,
+                   CASE WHEN jsonb_typeof(positions) = 'array' THEN positions END AS positions
+            FROM tracklets
+            WHERE person_id = $1
+        ) t
         LEFT JOIN cameras c2 ON c2.camera_id = t.camera_id
         CROSS JOIN LATERAL jsonb_array_elements(t.positions) WITH ORDINALITY AS elem(value, ordinality)
-        WHERE t.person_id = $1 AND t.positions IS NOT NULL AND jsonb_array_length(t.positions) > 0
 
         UNION ALL
 
         SELECT t.camera_id, c3.name AS camera_name,
                t.pos_x AS x, t.pos_y AS y, 'TRACK' AS direction, t.started_at AS timestamp
-        FROM tracklets t
+        FROM (
+            SELECT camera_id, started_at, pos_x, pos_y,
+                   CASE WHEN jsonb_typeof(positions) = 'array' THEN jsonb_array_length(positions) ELSE 0 END AS n_pos
+            FROM tracklets
+            WHERE person_id = $1
+        ) t
         LEFT JOIN cameras c3 ON c3.camera_id = t.camera_id
-        WHERE t.person_id = $1 AND t.pos_x IS NOT NULL
-          AND (t.positions IS NULL OR jsonb_array_length(t.positions) = 0)
+        WHERE t.pos_x IS NOT NULL AND t.n_pos = 0
 
         ORDER BY timestamp
         """,
@@ -314,19 +329,18 @@ async def get_camera_points(person_id: int, request: Request) -> list[CameraPoin
 
 @router.get("/{person_id}/dwell", response_model=list[DwellRecord])
 async def get_dwell(person_id: int, request: Request) -> list[DwellRecord]:
-    """Total waktu tinggal per zona, dipasangkan dari occupancy_events IN→OUT
-    berurutan (T4.3). Lintas hari sekaligus.
+    """Total waktu tinggal, dua sumber digabung (T4.3), lintas hari sekaligus:
 
-    Line vs polygon dipasangkan beda cara:
-    - **line**: satu garis menghadap SATU pintu fisik, dan satu ruangan bisa
-      punya banyak pintu (banyak zone_camera untuk zone_id yang sama). Kalau
-      dipasangkan per zone_id, IN lewat pintu A bisa ketarik OUT dari pintu B
-      yang gak berhubungan. Jadi dipasangkan per zone_camera_id (per pintu),
-      baru hasilnya dijumlah ke nama zona yang sama.
-    - **polygon**: zona (biasanya lorong) memang tumpang tindih 1:1 dengan
-      pandangan kameranya, jadi aman dipasangkan per zone_id langsung —
-      kalaupun ada >1 zone_camera untuk zona yang sama itu memang kamera yang
-      berbeda memandang ruang fisik yang sama."""
+    - **per kamera** (`kind='camera'`) — langsung dari tracklets.started_at/
+      ended_at, SELALU ADA, TIDAK butuh zona sama sekali. Ini yang bikin tab
+      Durasi tetap kerja walau belum ada zona digambar (atau zona-nya nempel
+      di kamera yang salah).
+    - **per zona, line-crossing SAJA** (`kind='zone'`) — dipasangkan IN→OUT
+      per zone_camera_id (per pintu fisik — satu ruangan bisa punya banyak
+      pintu, jangan dipasangkan lintas pintu). Polygon SENGAJA tidak dihitung
+      di sini — zona polygon (biasanya lorong) tumpang tindih 1:1 dengan
+      pandangan kameranya, jadi durasinya sama saja dengan durasi kamera di
+      atas; menghitungnya lagi di sini cuma duplikat."""
     pool = request.app.state.pool
     exists = await pool.fetchval("SELECT id FROM persons WHERE id = $1", person_id)
     if not exists:
@@ -334,29 +348,32 @@ async def get_dwell(person_id: int, request: Request) -> list[DwellRecord]:
 
     rows = await pool.fetch(
         """
-        WITH ev AS (
+        SELECT COALESCE(c.name, t.camera_id) AS zone_name, 'camera' AS kind,
+               SUM(EXTRACT(EPOCH FROM (t.ended_at - t.started_at))) AS dwell_seconds
+        FROM tracklets t
+        LEFT JOIN cameras c ON c.camera_id = t.camera_id
+        WHERE t.person_id = $1
+        GROUP BY COALESCE(c.name, t.camera_id)
+
+        UNION ALL
+
+        SELECT zone_name, 'zone' AS kind, SUM(EXTRACT(EPOCH FROM (timestamp - prev_ts))) AS dwell_seconds
+        FROM (
             SELECT
                 z.name AS zone_name,
                 oe.direction,
                 oe.timestamp,
-                LAG(oe.direction) OVER (
-                    PARTITION BY (CASE WHEN zc.type = 'line' THEN 'zc:' || zc.id::text ELSE 'z:' || z.id::text END)
-                    ORDER BY oe.timestamp
-                ) AS prev_dir,
-                LAG(oe.timestamp) OVER (
-                    PARTITION BY (CASE WHEN zc.type = 'line' THEN 'zc:' || zc.id::text ELSE 'z:' || z.id::text END)
-                    ORDER BY oe.timestamp
-                ) AS prev_ts
+                LAG(oe.direction) OVER (PARTITION BY zc.id ORDER BY oe.timestamp) AS prev_dir,
+                LAG(oe.timestamp) OVER (PARTITION BY zc.id ORDER BY oe.timestamp) AS prev_ts
             FROM occupancy_events oe
             JOIN persons p            ON p.label = oe.person_label
-            JOIN zone_cameras zc      ON zc.id   = oe.zone_camera_id
+            JOIN zone_cameras zc      ON zc.id   = oe.zone_camera_id AND zc.type = 'line'
             JOIN zones z              ON z.id    = zc.zone_id
             WHERE p.id = $1
-        )
-        SELECT zone_name, SUM(EXTRACT(EPOCH FROM (timestamp - prev_ts))) AS dwell_seconds
-        FROM ev
+        ) ev
         WHERE direction = 'OUT' AND prev_dir = 'IN'
         GROUP BY zone_name
+
         ORDER BY dwell_seconds DESC
         """,
         person_id,

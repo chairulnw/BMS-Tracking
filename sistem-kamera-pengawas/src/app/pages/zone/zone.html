@@ -214,38 +214,6 @@
           }
         </div>
 
-        <!-- Heatmap -->
-        <div class="view-section-title">
-          Heatmap
-          @if (viewZone.cameras.length > 1) {
-            <div class="select-wrap select-wrap--sm heatmap-cam-select">
-              <select class="table-filter-select" (change)="onHeatmapCameraChange($event)">
-                @for (cam of viewZone.cameras; track cam.id) {
-                  <option [value]="cam.camera_str_id" [selected]="cam.camera_str_id === heatmapCameraId">{{ cam.camera_name }}</option>
-                }
-              </select>
-            </div>
-          }
-        </div>
-        <div class="heatmap-wrap">
-          @if (!heatmapCameraId) {
-            <div class="list-empty">Belum ada kamera untuk heatmap.</div>
-          } @else {
-            <div class="snap-inner">
-              <img class="snap-img" [src]="heatmapSnapshotUrl | authUrl" alt="heatmap base" />
-              @if (heatmap) {
-                <div class="heatmap-grid" [style.gridTemplateColumns]="'repeat(' + heatmap.grid_size + ', 1fr)'">
-                  @for (row of heatmap.cells; track $index) {
-                    @for (count of row; track $index) {
-                      <div class="heatmap-cell" [style.opacity]="heatmapOpacity(count)"></div>
-                    }
-                  }
-                </div>
-              }
-            </div>
-          }
-        </div>
-
         <!-- Event history / evidence -->
         <div class="view-section-title">Riwayat Kejadian</div>
 

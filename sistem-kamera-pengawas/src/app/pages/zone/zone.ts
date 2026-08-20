@@ -61,7 +61,6 @@ interface OccupancyRow {
 }
 
 interface HistoryPoint { date: string; count_in: number; count_out: number; }
-interface Heatmap { grid_size: number; cells: number[][]; }
 
 interface ZoneEvent {
   id:           number;
@@ -196,10 +195,7 @@ export class ZonePage implements OnInit {
 
   historyPoints: HistoryPoint[] = [];
 
-  heatmapCameraId: string | null = null;
-  heatmapSnapshotUrl = '';
   viewCamSnapshotUrls: Record<string, string> = {};   // camera_str_id -> URL, diambil sekali pas modal dibuka
-  heatmap: Heatmap | null = null;
 
   events: ZoneEvent[] = [];
   eventsPage  = 1;
@@ -232,7 +228,6 @@ export class ZonePage implements OnInit {
       this.viewZone   = detail;
       this.showViewModal = true;
       this.rangeMode  = 'today';
-      this.heatmapCameraId = detail.cameras[0]?.camera_str_id ?? null;
       this.eventsPage = 1;
       // Snapshot diambil sekali pas modal dibuka — bukan tiap change-detection
       // cycle, biar gambarnya gak reload/kedip terus.
@@ -242,7 +237,6 @@ export class ZonePage implements OnInit {
           this.viewCamSnapshotUrls[cam.camera_str_id] = `${API}/cameras/${cam.camera_str_id}/snapshot?t=${Date.now()}`;
         }
       }
-      this.heatmapSnapshotUrl = this.heatmapCameraId ? this.viewCamSnapshotUrls[this.heatmapCameraId] ?? '' : '';
       this._reloadViewData();
     });
   }
@@ -268,27 +262,12 @@ export class ZonePage implements OnInit {
     if (this.rangeMode === 'custom') this._reloadViewData();
   }
 
-  onHeatmapCameraChange(event: Event): void {
-    this.heatmapCameraId = (event.target as HTMLSelectElement).value;
-    this.heatmapSnapshotUrl = this.viewCamSnapshotUrls[this.heatmapCameraId] ?? '';
-    this._loadHeatmap();
-  }
-
   private _reloadViewData(): void {
     if (!this.viewZone) return;
     const { from, to } = this._rangeDates();
     this.http.get<HistoryPoint[]>(`${API}/zones/${this.viewZone.id}/history?from=${from}&to=${to}`)
       .subscribe(points => { this.historyPoints = points; });
-    this._loadHeatmap();
     this._loadEvents();
-  }
-
-  private _loadHeatmap(): void {
-    if (!this.viewZone || !this.heatmapCameraId) { this.heatmap = null; return; }
-    const { from, to } = this._rangeDates();
-    this.http.get<Heatmap>(
-      `${API}/zones/${this.viewZone.id}/heatmap?camera_id=${this.heatmapCameraId}&from=${from}&to=${to}`
-    ).subscribe(h => { this.heatmap = h; });
   }
 
   loadEventsPage(page: number): void {
@@ -324,16 +303,6 @@ export class ZonePage implements OnInit {
 
   get historyMax(): number {
     return Math.max(1, ...this.historyPoints.map(p => Math.max(p.count_in, p.count_out)));
-  }
-
-  get heatmapMax(): number {
-    if (!this.heatmap) return 1;
-    return Math.max(1, ...this.heatmap.cells.flat());
-  }
-
-  heatmapOpacity(count: number): number {
-    if (count === 0) return 0;
-    return 0.15 + (count / this.heatmapMax) * 0.65;
   }
 
   onViewSnapshotLoad(index: number): void {

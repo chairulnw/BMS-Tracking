@@ -57,7 +57,11 @@ W_TIME                 = 0.15
 W_CAM                  = 0.15
 # ASSOC_THRESHOLD didefinisikan di app.schemas (satu sumber, dipakai juga sebagai
 # default reid_threshold di ProcessVideoRequest/StreamStartRequest).
-T_NEAR                 = 60.0     # detik — jeda ini dianggap masuk akal untuk pindah kamera
+T_NEAR                 = 180.0    # detik — jeda ini dianggap masuk akal untuk pindah kamera
+                                   # (dinaikkan dari 60s: T2.12 — 60s bikin false split parah,
+                                   # tracklet orang sama yang sempat lolos dari frame > 60s
+                                   # kehilangan seluruh skor f_time, cos_sim sendirian gak
+                                   # cukup buat lolos threshold yang sudah dinaikkan)
 T_FAR                  = 1800.0   # detik — jeda ini dianggap tidak informatif lagi
 TRACKLET_GAP_CYCLES    = 15       # siklus batch berturut-turut track hilang → tutup tracklet
 TRACKLET_MAX_DURATION  = 600.0    # detik — tutup paksa + buka tracklet baru dengan key sama
@@ -165,6 +169,12 @@ class IdentityDB:
         self._last_interval:   dict[str, tuple[datetime, datetime]] = {}
         self._last_cam:        dict[str, str]                   = {}
         self._camera_group:    dict[str, "str | int | None"]    = {}
+        # Mode file-playlist (evaluasi/testing): beberapa kamera memutar klip
+        # yang overlap waktu secara sengaja (simulasi), bukan indikasi orang
+        # beneran ada di 2 tempat. Hard constraint interval-overlap di
+        # associate() DIMATIKAN kalau flag ini true — hanya dipakai di sini,
+        # RTSP live tetap dapat constraint-nya (lihat StreamManager.start()).
+        self.skip_interval_guard: bool                          = False
 
         self._open: dict[tuple[str, int], Tracklet] = {}
 
@@ -285,13 +295,15 @@ class IdentityDB:
     def associate(self, emb: np.ndarray, tl: Tracklet) -> tuple["str | None", float]:
         """score = w_reid*cos + w_time*f_time(dt) + w_cam*P_transition(cam_prev,cam_now).
         Constraint keras: dua tracklet yang interval waktunya beririsan tidak
-        pernah dianggap orang yang sama (menggantikan collision guard lama)."""
+        pernah dianggap orang yang sama (menggantikan collision guard lama) —
+        kecuali `skip_interval_guard` true (mode file-playlist, lihat
+        StreamManager.start())."""
         interval = (tl.started_at, tl.last_seen)
         best_name, best_score = None, -1.0
         second_score = -1.0
         for name, bank in self._embeddings.items():
             other = self._last_interval.get(name)
-            if other is not None and _overlaps(interval, other):
+            if other is not None and _overlaps(interval, other) and not self.skip_interval_guard:
                 continue
             cos      = max(float(np.dot(emb, e["emb"])) for e in bank)
             last_cam = self._last_cam.get(name, tl.cam_id)

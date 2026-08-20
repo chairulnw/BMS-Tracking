@@ -462,8 +462,6 @@
   justify-content: space-between;
 }
 
-.heatmap-cam-select { width: 160px; }
-
 /* ── View modal: per-camera snapshot ─────────────────────────────────────── */
 
 .view-cams {
@@ -597,19 +595,6 @@
 }
 
 .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
-
-/* ── Heatmap ──────────────────────────────────────────────────────────────── */
-
-.heatmap-wrap { width: 100%; }
-
-.heatmap-grid {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  pointer-events: none;
-}
-
-.heatmap-cell { background: #ef4444; }
 
 /* ── Event table ──────────────────────────────────────────────────────────── */
 

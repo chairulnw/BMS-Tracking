@@ -1,6 +1,6 @@
 import asyncio
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -17,27 +17,61 @@ CACHE_DIR = Path("output/clips_web")
 
 
 def _find_clip(camera_id: str, target: datetime) -> Path | None:
+    """Cari klip yang jendela [mulai, mulai+durasi]-nya BENERAN mencakup
+    target. Sebelumnya cuma cek "klip terakhir yang mulai sebelum target" —
+    itu salah pilih klip yang sudah berakhir kalau target jatuh di jeda
+    IDLE setelah klip itu tutup tapi sebelum klip berikutnya (thumbnail
+    jadi buka klip yang gak sesuai). Durasi nyata dibaca dari sidecar
+    `.dur` yang ditulis clip_recorder.py._finalize(); kalau sidecar-nya gak
+    ada (klip lama / gagal ditulis), fallback ke klip terakhir yang mulai
+    sebelum target seperti dulu."""
     prefix = f"clip_{camera_id}_"
-    best_path: Path | None = None
-    best_ts:   datetime | None = None
+    containing: tuple[datetime, Path] | None = None
+    fallback:   tuple[datetime, Path] | None = None
     for f in CLIPS_DIR.glob(f"{prefix}*.avi"):
         stamp = f.name[len(prefix):-4]
         try:
             ts = datetime.strptime(stamp, "%Y%m%d_%H%M%S")
         except ValueError:
             continue
-        if ts <= target and (best_ts is None or ts > best_ts):
-            best_ts, best_path = ts, f
-    return best_path
+        if ts > target:
+            continue
+        if fallback is None or ts > fallback[0]:
+            fallback = (ts, f)
+
+        dur_sidecar = f.with_suffix(".dur")
+        if not dur_sidecar.exists():
+            continue
+        try:
+            duration = float(dur_sidecar.read_text().strip())
+        except (ValueError, OSError):
+            continue
+        end = ts + timedelta(seconds=duration)
+        if ts <= target <= end and (containing is None or ts > containing[0]):
+            containing = (ts, f)
+
+    if containing is not None:
+        return containing[1]
+    return fallback[1] if fallback else None
 
 
 def _transcode(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        ["ffmpeg", "-y", "-i", str(src), "-c:v", "libx264", "-pix_fmt", "yuv420p",
-         "-movflags", "+faststart", str(dst)],
-        check=True, capture_output=True,
-    )
+    cmd = ["ffmpeg", "-y"]
+    # Sidecar dari clip_recorder.py._finalize() — fps asli hasil hitung
+    # frame_ditulis/durasi_nyata (AVI-nya sendiri sengaja gak disentuh, lihat
+    # catatan di sana). "-r" SEBELUM "-i" nyuruh ffmpeg baca stream MJPEG ini
+    # di laju itu, bukan percaya declared-fps di header AVI yang cuma tebakan
+    # awal (di-set sebelum tau berapa lama klip beneran akan berjalan).
+    fps_sidecar = src.with_suffix(".fps")
+    if fps_sidecar.exists():
+        try:
+            cmd += ["-r", fps_sidecar.read_text().strip()]
+        except Exception:
+            pass
+    cmd += ["-i", str(src), "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-fps_mode", "cfr", "-movflags", "+faststart", str(dst)]
+    subprocess.run(cmd, check=True, capture_output=True)
 
 
 @router.get("/{camera_id}")

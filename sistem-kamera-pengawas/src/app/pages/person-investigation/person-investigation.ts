@@ -1,5 +1,5 @@
 import { Component, OnInit, inject } from '@angular/core';
-import { NgClass, NgStyle } from '@angular/common';
+import { NgClass } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { ActivatedRoute, Router } from '@angular/router';
 import { environment } from '../../../environments/environment';
@@ -54,6 +54,7 @@ interface DateGroup {
 
 interface DwellRecord {
   zone_name:     string;
+  kind:          string; // "camera" | "zone"
   dwell_seconds: number;
 }
 
@@ -66,11 +67,10 @@ interface CameraPoint {
   timestamp:   string;
 }
 
-interface HeatCell {
-  left: string;
-  top:  string;
-  size: string;
-  opacity: number;
+interface HeatCount {
+  gx: number;
+  gy: number;
+  count: number;
 }
 
 interface CameraOverlay {
@@ -80,11 +80,15 @@ interface CameraOverlay {
   naturalWidth:   number;
   naturalHeight:  number;
   points:         CameraPoint[];
-  heatCells:      HeatCell[];
+  heatCounts:     HeatCount[];
+  heatmapUrl:     string; // data URL PNG hasil accumulate→blur→normalize→colormap
   linePoints:     string; // atribut `points` SVG <polyline>, kosong kalau <2 titik
 }
 
-const HEATMAP_GRID = 8; // ponytail: grid tetap 8x8, cukup buat jumlah titik per orang yang biasanya sedikit
+// Resolusi grid akumulasi (bukan resolusi tampilan — itu HEATMAP_CANVAS_PX).
+// Cukup kasar; kehalusannya datang dari gaussian blur, bukan dari grid rapat.
+const HEATMAP_GRID      = 24;
+const HEATMAP_CANVAS_PX = 320; // sisi terpanjang kanvas output
 
 type TabId = 'timeline' | 'pergerakan' | 'durasi';
 type PergerakanView = 'garis' | 'heatmap';
@@ -92,7 +96,7 @@ type PergerakanView = 'garis' | 'heatmap';
 @Component({
   selector: 'app-person-investigation',
   standalone: true,
-  imports: [NgClass, NgStyle, AuthUrlPipe],
+  imports: [NgClass, AuthUrlPipe],
   templateUrl: './person-investigation.html',
   styleUrl: './person-investigation.css',
 })
@@ -225,7 +229,8 @@ export class PersonInvestigation implements OnInit {
           naturalWidth:  0,
           naturalHeight: 0,
           points:        pts,
-          heatCells:     [],
+          heatCounts:    [],
+          heatmapUrl:    '',
           linePoints:    '',
         }));
         this.overlaysLoaded = true;
@@ -238,26 +243,13 @@ export class PersonInvestigation implements OnInit {
     const img = event.target as HTMLImageElement;
     overlay.naturalWidth  = img.naturalWidth;
     overlay.naturalHeight = img.naturalHeight;
-    overlay.heatCells  = this._computeHeatCells(overlay);
     overlay.linePoints = this._computeLinePoints(overlay);
-  }
-
-  dotStyle(overlay: CameraOverlay, point: CameraPoint): Record<string, string> {
-    if (!overlay.naturalWidth || !overlay.naturalHeight) return { display: 'none' };
-    return {
-      left: `${(point.x / overlay.naturalWidth) * 100}%`,
-      top:  `${(point.y / overlay.naturalHeight) * 100}%`,
-    };
-  }
-
-  dotClass(point: CameraPoint): string {
-    if (point.direction === 'IN')  return 'overlay-dot--in';
-    if (point.direction === 'OUT') return 'overlay-dot--out';
-    return 'overlay-dot--track';
+    overlay.heatCounts = this._computeHeatCounts(overlay);
+    this._recomputeHeatColors();
   }
 
   // Rangkai titik-titik (urut waktu) jadi atribut `points` <polyline> SVG,
-  // dalam ruang viewBox 0..100 (persentase) — sinkron dengan dotStyle().
+  // dalam ruang viewBox 0..100 (persentase).
   private _computeLinePoints(overlay: CameraOverlay): string {
     if (!overlay.naturalWidth || !overlay.naturalHeight || overlay.points.length < 2) return '';
     return overlay.points
@@ -265,10 +257,10 @@ export class PersonInvestigation implements OnInit {
       .join(' ');
   }
 
-  // Grid kepadatan sederhana dari titik-titik lintas yang ada — bukan
-  // heatmap Gaussian, cuma binning per sel supaya area yang sering dilewati
-  // kelihatan lebih "panas".
-  private _computeHeatCells(overlay: CameraOverlay): HeatCell[] {
+  // Langkah "Akumulasi posisi" dari pipeline CV standar: bin tiap titik ke
+  // grid, hitung berapa kali tiap sel "kena". Blur & colormap-nya belum di
+  // sini — itu tugas _renderHeatmap() (butuh max GLOBAL dulu, lihat di sana).
+  private _computeHeatCounts(overlay: CameraOverlay): HeatCount[] {
     if (!overlay.naturalWidth || !overlay.naturalHeight || overlay.points.length === 0) return [];
     const counts = new Map<string, number>();
     for (const p of overlay.points) {
@@ -277,17 +269,96 @@ export class PersonInvestigation implements OnInit {
       const key = `${gx},${gy}`;
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
-    const max = Math.max(...counts.values());
-    const cellPct = 100 / HEATMAP_GRID;
     return Array.from(counts.entries()).map(([key, count]) => {
       const [gx, gy] = key.split(',').map(Number);
-      return {
-        left: `${gx * cellPct}%`,
-        top:  `${gy * cellPct}%`,
-        size: `${cellPct}%`,
-        opacity: 0.25 + 0.55 * (count / max),
-      };
+      return { gx, gy, count };
     });
+  }
+
+  // Pipeline heatmap CV standar, lewat <canvas>:
+  //   akumulasi (sudah dari _computeHeatCounts) → gaussian blur (native
+  //   canvas filter, bukan convolution manual) → normalisasi 0..1 →
+  //   colormap biru→hijau→kuning→merah → PNG.
+  // Normalisasi dihitung terhadap max GLOBAL (gabungan semua kamera orang
+  // ini), bukan max per-kamera — kalau tiap kamera dinormalisasi sendiri,
+  // orang yang cuma lewat 1x di satu kamera bikin sel itu langsung "merah
+  // penuh" walau sebenarnya jarang, padahal kamera lain yang dia lewati
+  // berkali-kali seharusnya yang paling merah.
+  private _renderHeatmap(overlay: CameraOverlay, globalMax: number): void {
+    if (!overlay.heatCounts.length || globalMax <= 0 || !overlay.naturalWidth) {
+      overlay.heatmapUrl = '';
+      return;
+    }
+
+    // 1) akumulasi → grid mentah grayscale (kecerahan = kepadatan mentah)
+    const raw  = document.createElement('canvas');
+    raw.width  = HEATMAP_GRID;
+    raw.height = HEATMAP_GRID;
+    const rctx = raw.getContext('2d')!;
+    for (const { gx, gy, count } of overlay.heatCounts) {
+      const v = Math.round((count / globalMax) * 255);
+      rctx.fillStyle = `rgb(${v},${v},${v})`;
+      rctx.fillRect(gx, gy, 1, 1);
+    }
+
+    // 2) upscale + gaussian blur — bikin area jadi smooth, bukan kotak-kotak
+    const outW = HEATMAP_CANVAS_PX;
+    const outH = Math.round(outW * (overlay.naturalHeight / overlay.naturalWidth));
+    const blurred = document.createElement('canvas');
+    blurred.width = outW; blurred.height = outH;
+    const bctx = blurred.getContext('2d')!;
+    bctx.filter = `blur(${outW / HEATMAP_GRID}px)`;
+    bctx.drawImage(raw, 0, 0, outW, outH);
+
+    // 3) normalisasi ulang (blur meratakan puncak) + mapping ke colormap,
+    // per piksel — inilah "apply_colormap(heatmap)".
+    const { data } = bctx.getImageData(0, 0, outW, outH);
+    let peak = 1;
+    for (let i = 0; i < data.length; i += 4) peak = Math.max(peak, data[i]);
+
+    const out  = document.createElement('canvas');
+    out.width  = outW; out.height = outH;
+    const octx = out.getContext('2d')!;
+    const img  = octx.createImageData(outW, outH);
+    for (let i = 0; i < data.length; i += 4) {
+      const t = data[i] / peak; // 0..1, kepadatan relatif final
+      if (t < 0.03) { img.data[i + 3] = 0; continue; } // area kosong = transparan
+      const [r, g, b] = this._colormap(t);
+      img.data[i]     = r;
+      img.data[i + 1] = g;
+      img.data[i + 2] = b;
+      img.data[i + 3] = Math.round((0.25 + 0.6 * t) * 255);
+    }
+    octx.putImageData(img, 0, 0);
+    overlay.heatmapUrl = out.toDataURL();
+  }
+
+  // Biru(240°) → Hijau(120°) → Kuning(60°) → Merah(0°) sesuai kepadatan t.
+  private _colormap(t: number): [number, number, number] {
+    return this._hslToRgb(240 - 240 * t, 0.9, 0.5);
+  }
+
+  private _hslToRgb(h: number, s: number, l: number): [number, number, number] {
+    h = ((h % 360) + 360) % 360;
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+    const m = l - c / 2;
+    let r = 0, g = 0, b = 0;
+    if      (h < 60)  [r, g, b] = [c, x, 0];
+    else if (h < 120) [r, g, b] = [x, c, 0];
+    else if (h < 180) [r, g, b] = [0, c, x];
+    else if (h < 240) [r, g, b] = [0, x, c];
+    else if (h < 300) [r, g, b] = [x, 0, c];
+    else              [r, g, b] = [c, 0, x];
+    return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
+  }
+
+  private _recomputeHeatColors(): void {
+    let globalMax = 0;
+    for (const overlay of this.cameraOverlays) {
+      for (const c of overlay.heatCounts) globalMax = Math.max(globalMax, c.count);
+    }
+    for (const overlay of this.cameraOverlays) this._renderHeatmap(overlay, globalMax);
   }
 
   private _loadDwell(personId: number): void {

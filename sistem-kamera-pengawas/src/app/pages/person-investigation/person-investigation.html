@@ -117,22 +117,14 @@
             <div class="overlay-card">
               <div class="overlay-frame">
                 <img [src]="ov.snapshotUrl" (load)="onOverlayImgLoad($event, ov)" alt="{{ ov.camera_name }}" />
-
                 @if (pergerakanView === 'garis') {
                   @if (ov.linePoints) {
                     <svg class="overlay-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
                       <polyline [attr.points]="ov.linePoints" fill="none" stroke="#E7000B" stroke-width="0.6" vector-effect="non-scaling-stroke" />
                     </svg>
                   }
-                  @for (pt of ov.points; track pt.timestamp) {
-                    <span class="overlay-dot" [ngClass]="dotClass(pt)"
-                      [ngStyle]="dotStyle(ov, pt)"
-                      title="{{ pt.direction }} · {{ fmtClock(pt.timestamp) }}"></span>
-                  }
-                } @else {
-                  @for (cell of ov.heatCells; track cell.left + cell.top) {
-                    <span class="heat-cell" [ngStyle]="{ left: cell.left, top: cell.top, width: cell.size, height: cell.size, opacity: cell.opacity }"></span>
-                  }
+                } @else if (ov.heatmapUrl) {
+                  <img class="overlay-heatmap" [src]="ov.heatmapUrl" alt="heatmap" />
                 }
               </div>
               <div class="overlay-cam-name">{{ ov.camera_name }}</div>
@@ -147,13 +139,18 @@
     @if (activeTab === 'durasi') {
       <div class="card">
         <div class="dwell-list">
-          @for (d of dwell; track d.zone_name) {
+          @for (d of dwell; track d.zone_name + d.kind) {
             <div class="dwell-row">
-              <span class="dwell-zone">{{ d.zone_name }}</span>
+              <span class="dwell-zone">
+                <span class="dwell-kind-badge" [ngClass]="d.kind === 'zone' ? 'dwell-kind-badge--zone' : 'dwell-kind-badge--camera'">
+                  {{ d.kind === 'zone' ? 'Zona' : 'Kamera' }}
+                </span>
+                {{ d.zone_name }}
+              </span>
               <span class="dwell-time">{{ fmtDuration(d.dwell_seconds) }}</span>
             </div>
           } @empty {
-            <div class="td-empty">Belum ada data durasi zona untuk orang ini.</div>
+            <div class="td-empty">Belum ada data durasi untuk orang ini.</div>
           }
         </div>
       </div>

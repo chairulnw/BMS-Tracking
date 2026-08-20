@@ -2,7 +2,6 @@
 prediksi untuk mode file-playback (dibandingkan dengan ground truth)."""
 
 import csv
-import subprocess
 import threading
 import time
 from collections import deque
@@ -13,6 +12,10 @@ import cv2
 import numpy as np
 
 CLIP_COOLDOWN  = 5.0
+MAX_FRAME_GAP  = 3.0   # detik — jeda nyata antar frame lebih dari ini (mis. mode
+                        # file-playlist nunggu giliran kamera lain) langsung tutup
+                        # klip yang lagi jalan, jangan biarkan durasinya melar
+                        # mencakup waktu nunggu itu (lihat clip "slow motion")
 CLIPS_DIR      = Path("output/clips")
 
 _CLIP_STOP = object()  # sentinel: finalize clip saat ganti file sumber
@@ -87,6 +90,7 @@ class ClipRecorder:
         self._last_valid:     np.ndarray | None      = None
         self._frames_written: int                    = 0
         self._frame_times:    deque[float]           = deque(maxlen=60)
+        self._last_update_at: float                  = 0.0
         self._lock            = threading.Lock()
 
     @staticmethod
@@ -115,6 +119,17 @@ class ClipRecorder:
     def update(self, frame: np.ndarray, has_person: bool, now: float,
                annotations: "list | None" = None) -> None:
         with self._lock:
+            # Jeda nyata sejak update() terakhir (bukan cuma "orang menghilang" —
+            # ini "frame beneran gak datang sama sekali", mis. kamera ini lagi
+            # nunggu giliran kamera lain di mode file-playlist). Kalau lagi
+            # merekam, tutup SEKARANG pakai waktu update TERAKHIR yang valid
+            # sebagai batas akhir — jangan biarkan durasi klip melar mencakup
+            # waktu nunggu itu (itu sumber klip "slow motion").
+            if (self._state != self._IDLE and self._last_update_at > 0
+                    and now - self._last_update_at > MAX_FRAME_GAP):
+                self._finalize(self._last_update_at - self._clip_start)
+            self._last_update_at = now
+
             self._frame_times.append(now)
             # draw = self._draw(frame, annotations) if annotations else frame  # BBOX_OVERLAY
             draw = frame
@@ -139,7 +154,14 @@ class ClipRecorder:
     def force_stop(self) -> None:
         with self._lock:
             if self._writer is not None:
-                self._finalize(time.time() - self._clip_start)
+                # _clip_start dicatat pakai time.monotonic() (lihat _start()) —
+                # dulu di sini pakai time.time() (epoch), beda basis jam sama
+                # sekali, hasil "duration"-nya ngaco (miliaran detik). Itu bikin
+                # _fix_container_fps() diam-diam gagal (fps hasil hitung gak
+                # masuk akal, ffmpeg -r nolak) — inilah kenapa fix fps kemarin
+                # kelihatan gak ngefek: mayoritas klip di mode file-playlist
+                # ditutup lewat force_stop() ini, bukan lewat CLIP_COOLDOWN.
+                self._finalize(time.monotonic() - self._clip_start)
 
     def _start(self, frame: np.ndarray, now: float) -> None:
         CLIPS_DIR.mkdir(parents=True, exist_ok=True)
@@ -195,28 +217,33 @@ class ClipRecorder:
         # sampel itu diambil, tebakan itu ke-"kunci" untuk SELURUH klip walau
         # kecepatan sebenarnya berubah-ubah, hasilnya playback kerasa lambat/
         # patah-patah. Di sini kita tahu PERSIS berapa frame ditulis dan
-        # berapa detik nyata terpakai — hitung ulang fps yang jujur dan
-        # remux (stream-copy, tanpa transcode ulang) supaya declared fps
-        # klip cocok dengan kecepatan rekam yang sebenarnya terjadi.
+        # berapa detik nyata terpakai — tulis fps yang jujur ke file sidecar
+        # (dibaca ai-service/app/routers/clips.py saat transcode ke MP4).
+        #
+        # Sengaja TIDAK remux .avi-nya sendiri (dulu dicoba: `ffmpeg -c copy
+        # -r <fps>`, stream-copy tanpa transcode ulang) — fps hasil hitung di
+        # sini biasanya pecahan presisi tinggi (mis. 2503/500), dan AVI/MJPEG
+        # ternyata gak selalu bisa nyimpen timebase sepresisi itu; remux
+        # begitu bikin frame-frame-nya "nabrak" timestamp yang sama, dan
+        # ffmpeg PASS KEDUA (waktu transcode ke MP4) cuma baca sebagian
+        # frame-nya balik (246 frame di .avi asli jadi cuma 61 di .mp4) —
+        # klip-nya tetap kelihatan slow-motion, cuma pindah tempat bug-nya.
+        # Lebih aman: sentuh .avi sumbernya SEKALI SAJA, pas transcode akhir.
         if frames >= 2 and duration > 0.1:
             true_fps = frames / duration
-            # Thread terpisah, fire-and-forget — _finalize() dipanggil dari
-            # dalam update() yang MEMEGANG self._lock; subprocess ffmpeg
-            # sinkron di sini akan menahan lock dan bikin frame berikutnya
-            # (klip BARU yang mungkin langsung mulai) ikut ketahan/hilang.
-            threading.Thread(
-                target=self._fix_container_fps, args=(path, true_fps),
-                daemon=True, name=f"fixfps-{self._camera_id}",
-            ).start()
+            try:
+                path.with_suffix(".fps").write_text(f"{true_fps:.6f}")
+            except Exception as exc:
+                print(f"[clip:{self._camera_id}] gagal tulis sidecar fps ({path.name}): {exc}")
 
-    def _fix_container_fps(self, path: Path, true_fps: float) -> None:
-        tmp = path.with_suffix(".fixfps.avi")
+        # Durasi nyata klip ini (detik) — dipakai clips.py buat tahu jendela
+        # [start, start+dur] klip ini, bukan cuma waktu mulainya. Tanpa ini
+        # _find_clip() cuma bisa nebak "klip terakhir yang MULAI sebelum
+        # target", dan kalau target sebenarnya sudah lewat dari akhir klip
+        # itu (klip pendek, lalu ada jeda IDLE, baru klip berikutnya mulai),
+        # itu tetap salah pilih klip yang sudah berakhir padahal ada klip lain
+        # yang beneran mencakup waktu itu.
         try:
-            subprocess.run(
-                ["ffmpeg", "-y", "-i", str(path), "-c", "copy", "-r", f"{true_fps:.3f}", str(tmp)],
-                check=True, capture_output=True, timeout=10,
-            )
-            tmp.replace(path)
+            path.with_suffix(".dur").write_text(f"{duration:.3f}")
         except Exception as exc:
-            print(f"[clip:{self._camera_id}] gagal koreksi fps ({path.name}): {exc}")
-            tmp.unlink(missing_ok=True)
+            print(f"[clip:{self._camera_id}] gagal tulis sidecar durasi ({path.name}): {exc}")

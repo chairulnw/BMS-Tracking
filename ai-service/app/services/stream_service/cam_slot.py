@@ -88,7 +88,16 @@ class _CamSlot:
         self.height = 1080
 
         self._cap:        cv2.VideoCapture | None = None
-        self.frame_q:     queue.Queue             = queue.Queue(maxsize=2)
+        # RTSP live: sengaja kecil (2) — "selalu proses frame TERBARU", buang
+        # yang lama, biar sistem gak numpuk antrian & tetap responsif kalau
+        # inferensi sempat lambat. Mode file-playlist (evaluasi/testing) mau
+        # SEMUA frame diproses, bukan cuma yang terbaru — buffer kecil di situ
+        # cuma bikin banyak frame dibuang walau inferensinya sendiri gak
+        # kewalahan (terbukti: predictions.csv kehilangan 16-92% frame padahal
+        # klip rekaman via rec_q, buffer 90, hampir gak kehilangan apa-apa).
+        # File terbatas (bukan stream tanpa akhir), jadi aman dibikin tanpa
+        # batas — gak akan numpuk selamanya kayak RTSP live yang gak berhenti.
+        self.frame_q:     queue.Queue             = queue.Queue(maxsize=0 if self._playlist else 2)
         self.rec_q:       queue.Queue             = queue.Queue(maxsize=90)
         self._rec_has_person: bool                = False
         self._rec_annots: list                    = []

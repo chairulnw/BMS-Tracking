@@ -419,6 +419,7 @@ class BatchProcessor:
             _BackendClient.post_detection(
                 result["display_name"], cam, result["best_conf"], "appearance",
                 det_url, label, result["track_id"],
+                timestamp=result["ended_at"],
             )
             _BackendClient.post_tracklet(
                 cam, result["track_id"], label,

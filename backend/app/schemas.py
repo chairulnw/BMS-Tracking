@@ -329,8 +329,13 @@ class TrajectoryPoint(BaseModel):
 
 
 class DwellRecord(BaseModel):
-    """Total waktu tinggal per zona, dari pasangan IN/OUT occupancy_events (T4.3)."""
+    """Total waktu tinggal, dari tracklets per kamera ATAU pasangan IN/OUT
+    occupancy_events per zona line-crossing (T4.3). `kind` bedain sumbernya —
+    'camera' (selalu ada, gak butuh zona) vs 'zone' (cuma zona line-crossing;
+    polygon sengaja gak dihitung di sini, itu tumpang tindih sama durasi
+    kamera-nya sendiri)."""
     zone_name:     str
+    kind:          str  # "camera" | "zone"
     dwell_seconds: float
 
 
