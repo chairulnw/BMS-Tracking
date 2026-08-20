@@ -18,6 +18,7 @@ async def people_feed(
     request:     Request,
     q:           str | None  = Query(None, description="Cari nama/label orang pemilik deteksi"),
     camera_id:   str | None  = Query(None, description="Boleh multi dipisah koma (OR) — 'c1,c2'"),
+    zone_id:     int | None  = Query(None, description="Filter ke kamera yang tertaut ke zone ini"),
     person_id:   int | None  = Query(None, description="Semua deteksi satu orang — dipakai tab Timeline"),
     from_date:   date | None = Query(None, alias="from"),
     to_date:     date | None = Query(None, alias="to"),
@@ -58,6 +59,13 @@ async def people_feed(
         if values:
             params.append(values)
             conditions.append(f"d.camera_id = ANY(${len(params)}::text[])")
+    if zone_id is not None:
+        params.append(zone_id)
+        conditions.append(f"""EXISTS (
+            SELECT 1 FROM zone_cameras zc2
+            JOIN cameras c2 ON c2.id = zc2.camera_id
+            WHERE c2.camera_id = d.camera_id AND zc2.zone_id = ${len(params)}
+        )""")
     if person_id is not None:
         params.append(person_id)
         conditions.append(f"d.person_id = ${len(params)}")

@@ -102,7 +102,12 @@ _CAMERA_SELECT = """
         c.id, c.camera_id, c.name, c.location, c.group_id, c.rtsp_url,
         c.is_active, c.analytics_enabled, c.created_at,
         cg.name AS group_name,
-        COALESCE(zc.zone_count, 0)::int AS zone_count
+        COALESCE(zc.zone_count, 0)::int AS zone_count,
+        CASE health.event_type
+            WHEN 'camera_online'  THEN 'online'
+            WHEN 'camera_offline' THEN 'offline'
+        END AS health_status,
+        health.timestamp AS last_seen
     FROM cameras c
     LEFT JOIN camera_groups cg ON cg.id = c.group_id
     LEFT JOIN (
@@ -110,6 +115,14 @@ _CAMERA_SELECT = """
         FROM zone_cameras
         GROUP BY camera_id
     ) zc ON zc.camera_id = c.id
+    LEFT JOIN LATERAL (
+        SELECT event_type, timestamp
+        FROM camera_events ce
+        WHERE ce.camera_id = c.camera_id
+          AND ce.event_type IN ('camera_online', 'camera_offline')
+        ORDER BY ce.timestamp DESC
+        LIMIT 1
+    ) health ON true
 """
 
 

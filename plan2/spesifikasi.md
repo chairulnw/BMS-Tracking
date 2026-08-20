@@ -40,21 +40,31 @@ Tidak ada kerjaan terbuka di area ini kecuali muncul bug baru.
 - [x] Kamera offline tidak ikut batch inferensi YOLO — **selesai
       2026-08-21**: `batch_processor.py` (`active_idx`/`active_results`),
       dulu buang GPU/CPU cycle terus-menerus untuk kamera mati *(Camera Health)*
-- [ ] **Kecil** — endpoint status ringkas per kamera (online/offline/last_seen);
-      sekarang cuma bisa ditarik manual dari histori `camera_events`
-      *(Camera Health)*
-- [ ] **Kecil** — Telegram Bot webhook saat `category == "critical"` tercatat
-      (sekarang cuma `camera_offline`) — gratis, tanpa verifikasi bisnis,
-      endpoint `camera_events` sudah ada, tinggal listener + `sendMessage`
-      *(Notification)*
+- [x] Endpoint status ringkas per kamera — **selesai 2026-08-21**:
+      `GET /cameras` sekarang balikin `health_status` (`online`/`offline`/
+      `null`) + `last_seen`, derived dari event `camera_online`/`camera_offline`
+      terakhir (`cameras.py` `_CAMERA_SELECT`, LATERAL JOIN ke `camera_events`
+      — gak nambah tabel baru) *(Camera Health)*
+- [x] Telegram Bot webhook saat `category == "critical"` — **selesai
+      2026-08-21**: `backend/app/notify.py` (`notify_telegram`), dipanggil
+      dari `POST /camera-events` saat category critical. Isi
+      `TELEGRAM_BOT_TOKEN`+`TELEGRAM_CHAT_ID` di `.env` buat aktifkan (no-op
+      kalau kosong) *(Notification)*
+- [x] **Bug ditemukan & diperbaiki**: disk guard sebelumnya bandingin ke
+      persen disk **seluruh sistem**, bukan folder project — di mesin dengan
+      disk 90%+ penuh gara-gara hal lain (OS, app lain), guard itu gak akan
+      pernah berhasil turunin ke threshold cuma dari folder ini, jadi
+      **terus-menerus hapus file yang baru dibuat**. Diganti jadi cap ukuran
+      folder sendiri: `MAX_STORAGE_GB` (default 5GB) — `retention.py`
 
 **Definition of Done**
 - [x] Simulasi disk penuh → clip lama otomatis kehapus, service tidak crash
       (diverifikasi via self-check `python app/services/retention.py`)
 - [x] Matikan kamera dummy lalu nyalakan lagi → reconnect otomatis tanpa
       restart manual
-- [ ] `GET /cameras` (atau endpoint baru) balikin status online/offline/last_seen
-- [ ] Matikan 1 kamera dummy → pesan Telegram masuk dalam <1 menit
+- [x] `GET /cameras` balikin status online/offline/last_seen
+- [ ] Matikan 1 kamera dummy → pesan Telegram masuk dalam <1 menit (perlu
+      `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` diisi buat diverifikasi manual)
 
 ---
 
@@ -67,18 +77,19 @@ Tidak ada kerjaan terbuka di area ini kecuali muncul bug baru.
 - [x] `POST /stream/start` idempotent — **sudah ada**: `StreamManager.start()`
       double-checked locking (`stream_manager.py:57` & `:65`), raise
       `RuntimeError` kalau sudah jalan, tidak pernah buka koneksi dobel
-- [ ] **Kecil** — satukan timezone: `zones.py` default filter pakai
-      Asia/Jakarta (baris 201) tapi agregasi occupancy/history pakai UTC
-      (baris 239-318), sementara `persons.py` konsisten Jakarta *(Occupancy)*
-- [ ] **Kecil** — verifikasi filter zone ada di endpoint search people, belum
-      dicek langsung *(Search)*
+- [x] Satukan timezone — **selesai 2026-08-21**: semua `AT TIME ZONE 'UTC'`
+      di `zones.py` (occupancy, history, heatmap, events) diganti
+      `'Asia/Jakarta'`, konsisten dengan `persons.py` *(Occupancy)*
+- [x] Filter zone di Search — **selesai 2026-08-21**: ternyata belum ada,
+      ditambahkan `zone_id` query param di `GET /people/feed` (EXISTS
+      subquery ke `zone_cameras`) *(Search)*
 - [ ] **Sedang** — metric CPU/RAM/waktu-per-batch; `GET /health` sekarang cuma
       boolean model-loaded, tidak ada metric apapun di `BatchProcessor`
       *(System Health)*
 
 **Definition of Done**
 - [ ] Restart AI-service pertengahan recording → clip sebelumnya tetap valid, tidak corrupt
-- [ ] `/occupancy` dan `/persons` pakai timezone yang sama untuk tanggal yang sama
+- [x] `/occupancy` dan `/persons` pakai timezone yang sama untuk tanggal yang sama
 - [ ] Ada angka konkret CPU/RAM/batch-time yang bisa dipantau, bukan cuma boolean `/health`
 
 ---
@@ -88,8 +99,10 @@ Tidak ada kerjaan terbuka di area ini kecuali muncul bug baru.
 - [ ] **Sedang** — status ack/unack per event, dashboard prioritas — sekarang
       severity cuma `camera_events.category` (info/critical) tanpa status
       ditindaklanjuti-atau-belum *(Alarm Management)*
-- [ ] **Kecil** — review JWT expiry di `app/auth.py` kedua service, pastikan
-      tidak infinite *(Akses/Login)*
+- [x] Review JWT expiry — **dicek 2026-08-21, sudah aman**: backend
+      `ACCESS_TOKEN_EXPIRE_MINUTES` (default 720 = 12 jam, via env), ai-service
+      service token 24 jam hardcode (`ai-service/app/auth.py:14`). Tidak ada
+      yang infinite, tidak perlu perubahan *(Akses/Login)*
 
 **Definition of Done**
 - [ ] Event bisa ditandai "sudah ditindaklanjuti" dan itu kelihatan di UI
@@ -114,10 +127,7 @@ Tidak ada kerjaan terbuka di area ini kecuali muncul bug baru.
 
 ---
 
-## Fase 5 — Butuh keputusan produk dulu (Besar)
-
-*Bukan soal kurang kode, tapi scope yang belum diputuskan — jangan mulai
-coding sebelum ini jelas.*
+## Fase 5
 
 - [ ] **System Configuration** — tidak ada tabel settings maupun UI untuk
       threshold. `conf_threshold`/`reid_threshold` cuma parameter
@@ -133,13 +143,3 @@ coding sebelum ini jelas.*
 - [ ] Admin bisa ubah threshold dari UI tanpa restart service
 
 ---
-
-## Diputuskan tidak dikerjakan
-
-- **Role-based access (`Akses/Login`)** — sistem cukup satu tingkat akses;
-  login saja sudah menutup kebutuhan, menambah role berarti membangun user
-  management ganda tanpa kebutuhan operasional yang jelas.
-- **Audit Log** — butuh halaman frontend baru untuk ditampilkan; effort tidak
-  sepadan untuk skala operasional saat ini.
-- **WebSocket live view (`API/Integration`)** — live view di luar tanggung
-  jawab/scope kerja saat ini.

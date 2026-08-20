@@ -236,14 +236,14 @@ async def zone_history(
     rows = await request.app.state.pool.fetch(
         """
         SELECT
-            (oe.timestamp AT TIME ZONE 'UTC')::date AS date,
+            (oe.timestamp AT TIME ZONE 'Asia/Jakarta')::date AS date,
             COALESCE(SUM(CASE WHEN oe.direction = 'IN'  THEN 1 ELSE 0 END), 0)::int AS count_in,
             COALESCE(SUM(CASE WHEN oe.direction = 'OUT' THEN 1 ELSE 0 END), 0)::int AS count_out
         FROM occupancy_events oe
         JOIN zone_cameras zc ON zc.id = oe.zone_camera_id
         WHERE zc.zone_id = $1
-          AND (oe.timestamp AT TIME ZONE 'UTC')::date BETWEEN $2 AND $3
-        GROUP BY (oe.timestamp AT TIME ZONE 'UTC')::date
+          AND (oe.timestamp AT TIME ZONE 'Asia/Jakarta')::date BETWEEN $2 AND $3
+        GROUP BY (oe.timestamp AT TIME ZONE 'Asia/Jakarta')::date
         ORDER BY date
         """,
         zone_id, date_from, date_to,
@@ -265,10 +265,10 @@ async def zone_heatmap(
     params: list = [zone_id, camera_id]
     idx = 3
     if date_from:
-        conditions.append(f"(oe.timestamp AT TIME ZONE 'UTC')::date >= ${idx}")
+        conditions.append(f"(oe.timestamp AT TIME ZONE 'Asia/Jakarta')::date >= ${idx}")
         params.append(date_from); idx += 1
     if date_to:
-        conditions.append(f"(oe.timestamp AT TIME ZONE 'UTC')::date <= ${idx}")
+        conditions.append(f"(oe.timestamp AT TIME ZONE 'Asia/Jakarta')::date <= ${idx}")
         params.append(date_to); idx += 1
     where = " AND ".join(conditions)
 
@@ -312,10 +312,10 @@ async def zone_events(
     params: list = [zone_id]
     idx = 2
     if date_from:
-        conditions.append(f"(oe.timestamp AT TIME ZONE 'UTC')::date >= ${idx}")
+        conditions.append(f"(oe.timestamp AT TIME ZONE 'Asia/Jakarta')::date >= ${idx}")
         params.append(date_from); idx += 1
     if date_to:
-        conditions.append(f"(oe.timestamp AT TIME ZONE 'UTC')::date <= ${idx}")
+        conditions.append(f"(oe.timestamp AT TIME ZONE 'Asia/Jakarta')::date <= ${idx}")
         params.append(date_to); idx += 1
     if camera_id:
         conditions.append(f"oe.camera_id = ${idx}")

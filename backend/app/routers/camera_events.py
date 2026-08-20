@@ -2,6 +2,7 @@ from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Query, Request
 
+from app.notify import notify_telegram
 from app.schemas import CameraEventCreate, CameraEventResponse, StatsToday
 
 router = APIRouter(tags=["camera-events"])
@@ -24,6 +25,9 @@ async def create_camera_event(req: CameraEventCreate, request: Request) -> Camer
     cam = await pool.fetchrow(
         "SELECT name FROM cameras WHERE camera_id = $1", req.camera_id
     )
+    if req.category == "critical":
+        cam_label = cam["name"] if cam else req.camera_id
+        await notify_telegram(f"🔴 {cam_label}: {req.description or req.event_type}")
     return {**dict(row), "camera_name": cam["name"] if cam else None}
 
 

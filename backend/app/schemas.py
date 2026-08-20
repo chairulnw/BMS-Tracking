@@ -112,6 +112,8 @@ class CameraResponse(BaseModel):
     analytics_enabled:  bool
     zone_count:         int = 0
     created_at:         datetime
+    health_status:      str | None = None       # 'online' | 'offline' | None (belum pernah lapor)
+    last_seen:          datetime | None = None  # timestamp event health terakhir
 
 
 # ── Zones (line or polygon occupancy areas) ────────────────────────────────────

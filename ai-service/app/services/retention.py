@@ -1,8 +1,7 @@
-"""Fase 1 plan2/01-roadmap.md: hapus clip/thumbnail lama + guard disk penuh.
+"""Fase 1 plan2/spesifikasi.md: hapus clip/thumbnail lama + guard kapasitas.
 Dijalankan sebagai background thread dari lifespan (app/main.py)."""
 
 import os
-import shutil
 import threading
 import time
 from pathlib import Path
@@ -11,7 +10,14 @@ CLIPS_DIR      = Path("output/clips")
 THUMBNAILS_DIR = Path("thumbnails")  # termasuk thumbnails/events/ (rglob)
 
 RETENTION_DAYS         = float(os.getenv("RETENTION_DAYS", "14"))
-DISK_GUARD_PCT         = float(os.getenv("DISK_GUARD_PCT", "90"))
+# ponytail: cap ukuran folder project sendiri (GB), BUKAN persentase disk
+# seluruh sistem — disk Mac/server bisa 90%+ penuh gara-gara hal lain sama
+# sekali (OS, app lain) yang gak ada hubungannya sama clip/thumbnail di sini.
+# Guard berbasis persen-disk-seluruh-sistem pernah kejadian nyata: disk 93%
+# (padahal project cuma raih beberapa ratus MB), guard nyoba turunin ke 90%
+# dan gak akan PERNAH berhasil cuma dari folder ini — jadi dia hapus TERUS,
+# termasuk file yang baru dibuat beberapa menit lalu.
+MAX_STORAGE_GB         = float(os.getenv("MAX_STORAGE_GB", "5"))
 CLEANUP_INTERVAL_HOURS = float(os.getenv("CLEANUP_INTERVAL_HOURS", "6"))
 
 
@@ -23,13 +29,13 @@ def _files_by_age(dirs: list[Path]) -> list[Path]:
 
 
 def cleanup_once(
-    dirs:           list[Path] | None = None,
-    retention_days: float             = RETENTION_DAYS,
-    disk_guard_pct: float             = DISK_GUARD_PCT,
+    dirs:            list[Path] | None = None,
+    retention_days:  float             = RETENTION_DAYS,
+    max_storage_gb:  float             = MAX_STORAGE_GB,
 ) -> int:
-    """Hapus file lebih tua dari `retention_days`, lalu — kalau disk masih di
-    atas `disk_guard_pct` — hapus file terlama sampai di bawah threshold.
-    Return jumlah file yang dihapus."""
+    """Hapus file lebih tua dari `retention_days`, lalu — kalau total ukuran
+    `dirs` masih di atas `max_storage_gb` — hapus file terlama sampai di
+    bawah batas. Return jumlah file yang dihapus."""
     dirs = dirs if dirs is not None else [CLIPS_DIR, THUMBNAILS_DIR]
     removed = 0
     now = time.time()
@@ -43,26 +49,24 @@ def cleanup_once(
             except OSError:
                 pass
 
-    probe_dir = next((d for d in dirs if d.exists()), None)
-    if probe_dir is not None:
-        usage = shutil.disk_usage(probe_dir)
-        pct_used = usage.used / usage.total * 100
-        if pct_used > disk_guard_pct:
-            print(f"[retention] disk {pct_used:.1f}% > guard {disk_guard_pct}% — hapus file terlama")
-            for f in _files_by_age(dirs):
-                try:
-                    size = f.stat().st_size
-                    f.unlink()
-                    removed += 1
-                except OSError:
-                    continue
-                usage = shutil.disk_usage(probe_dir)
-                pct_used = usage.used / usage.total * 100
-                if pct_used <= disk_guard_pct:
-                    break
+    max_bytes = max_storage_gb * 1024**3
+    remaining = _files_by_age(dirs)
+    total_bytes = sum(f.stat().st_size for f in remaining)
+    if total_bytes > max_bytes:
+        print(f"[retention] folder {total_bytes / 1024**3:.2f}GB > cap {max_storage_gb}GB — hapus file terlama")
+        for f in remaining:
+            if total_bytes <= max_bytes:
+                break
+            try:
+                size = f.stat().st_size
+                f.unlink()
+            except OSError:
+                continue
+            total_bytes -= size
+            removed += 1
 
     if removed:
-        print(f"[retention] {removed} file dihapus (retensi {retention_days}d, guard {disk_guard_pct}%)")
+        print(f"[retention] {removed} file dihapus (retensi {retention_days}d, cap {max_storage_gb}GB)")
     return removed
 
 
@@ -81,7 +85,7 @@ def start_background(stop_event: threading.Event) -> threading.Thread:
 
 
 def _demo() -> None:
-    """ponytail self-check: file tua & disk-guard beneran kehapus, file baru selamat."""
+    """ponytail self-check: file tua & cap-kapasitas beneran kehapus, file baru dalam batas selamat."""
     import tempfile
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -93,10 +97,21 @@ def _demo() -> None:
         old_time = time.time() - 20 * 86400  # 20 hari lalu
         os.utime(old, (old_time, old_time))
 
-        removed = cleanup_once([d], retention_days=14, disk_guard_pct=100)
+        removed = cleanup_once([d], retention_days=14, max_storage_gb=100)
         assert removed == 1, f"expected 1 file removed, got {removed}"
         assert not old.exists(), "file tua harusnya kehapus"
         assert new.exists(), "file baru harusnya selamat"
+
+        # cap kapasitas: dua file baru, cap sangat kecil → file terlama diantaranya kehapus
+        d2 = Path(tmp) / "cap"
+        d2.mkdir()
+        a, b = d2 / "a.avi", d2 / "b.avi"
+        a.write_bytes(b"x" * 2000)
+        os.utime(a, (time.time() - 10, time.time() - 10))
+        b.write_bytes(b"x" * 2000)
+        removed2 = cleanup_once([d2], retention_days=14, max_storage_gb=2000 / 1024**3)
+        assert removed2 == 1, f"expected 1 file removed by cap, got {removed2}"
+        assert not a.exists() and b.exists(), "file terlama harusnya kehapus, yang baru selamat"
     print("retention self-check OK")
 
 
