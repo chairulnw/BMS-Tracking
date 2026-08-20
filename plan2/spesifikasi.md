@@ -83,29 +83,31 @@ Tidak ada kerjaan terbuka di area ini kecuali muncul bug baru.
 - [x] Filter zone di Search — **selesai 2026-08-21**: ternyata belum ada,
       ditambahkan `zone_id` query param di `GET /people/feed` (EXISTS
       subquery ke `zone_cameras`) *(Search)*
-- [ ] **Sedang** — metric CPU/RAM/waktu-per-batch; `GET /health` sekarang cuma
-      boolean model-loaded, tidak ada metric apapun di `BatchProcessor`
-      *(System Health)*
+- [x] Metric CPU/RAM/waktu-per-batch — **selesai 2026-08-21**: `GET /health`
+      sekarang balikin `cpu_percent`/`ram_percent` (psutil) +
+      `last_batch_ms`/`avg_batch_ms`/`cameras_active` (dari
+      `BatchProcessor.get_metrics()`, rolling window 50 batch) *(System Health)*
 
 **Definition of Done**
 - [ ] Restart AI-service pertengahan recording → clip sebelumnya tetap valid, tidak corrupt
 - [x] `/occupancy` dan `/persons` pakai timezone yang sama untuk tanggal yang sama
-- [ ] Ada angka konkret CPU/RAM/batch-time yang bisa dipantau, bukan cuma boolean `/health`
+- [x] Ada angka konkret CPU/RAM/batch-time yang bisa dipantau, bukan cuma boolean `/health`
 
 ---
 
 ## Fase 3 — Alarm & akses
 
-- [ ] **Sedang** — status ack/unack per event, dashboard prioritas — sekarang
-      severity cuma `camera_events.category` (info/critical) tanpa status
-      ditindaklanjuti-atau-belum *(Alarm Management)*
+- [x] Status ack/unack per event — **selesai 2026-08-21**: kolom
+      `acknowledged`/`acknowledged_at` di `camera_events`, endpoint
+      `PATCH /camera-events/{id}/ack`, tombol "Tandai selesai" di tabel
+      Kejadian Terakhir (`/overview`, bukan halaman baru) *(Alarm Management)*
 - [x] Review JWT expiry — **dicek 2026-08-21, sudah aman**: backend
       `ACCESS_TOKEN_EXPIRE_MINUTES` (default 720 = 12 jam, via env), ai-service
       service token 24 jam hardcode (`ai-service/app/auth.py:14`). Tidak ada
       yang infinite, tidak perlu perubahan *(Akses/Login)*
 
 **Definition of Done**
-- [ ] Event bisa ditandai "sudah ditindaklanjuti" dan itu kelihatan di UI
+- [x] Event bisa ditandai "sudah ditindaklanjuti" dan itu kelihatan di UI
 
 ---
 
@@ -114,10 +116,16 @@ Tidak ada kerjaan terbuka di area ini kecuali muncul bug baru.
 - [ ] **Sedang** — dashboard kapasitas admin-facing (estimasi GB/hari,
       proyeksi kapan disk habis); belum ada tempat lihat ini dari UI
       *(Storage Management)*
-- [ ] **Sedang** — retention policy untuk tabel DB (`detections`/`tracklets`),
-      sekarang cuma file di disk yang di-cover Fase 1 *(Storage Management)*
-- [ ] **Sedang** — dokumentasi kapasitas: berapa kamera max per instance
-      `BatchProcessor` sebelum FPS drop (ukur, jangan tebak)
+- [x] Retention policy untuk tabel DB — **selesai 2026-08-21**:
+      `backend/app/retention.py`, hapus `detections`/`tracklets` lebih tua
+      dari `DB_RETENTION_DAYS` (default 90 hari), background task dari
+      `main.py` lifespan, jalan tiap `DB_CLEANUP_INTERVAL_HOURS` (default 24j)
+      *(Storage Management)*
+- [ ] **Sedang, belum bisa dikerjakan** — dokumentasi kapasitas: berapa
+      kamera max per instance `BatchProcessor` sebelum FPS drop. Butuh
+      benchmark nyata dengan beban kamera sungguhan, bukan sesuatu yang bisa
+      dikode — tapi metric `avg_batch_ms` di atas (System Health) sekarang
+      jadi alat ukurnya begitu ada beban live
 - [ ] **Sedang** — ONVIF discovery/PTZ kalau ada kamera yang mendukung —
       sekarang cuma RTSP statis dari tabel `cameras`
 

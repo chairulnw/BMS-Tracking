@@ -357,6 +357,31 @@
 .btn-lihat:hover { background: rgba(34,197,94,0.18); }
 
 .td-no-action { color: #4B5563; }
+
+.td-aksi { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+.btn-ack {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #D1D5DC;
+  background: rgba(209,213,220,0.08);
+  border: 1px solid rgba(209,213,220,0.25);
+  border-radius: 4px;
+  padding: 4px 12px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.btn-ack:hover { background: rgba(209,213,220,0.16); }
+
+.ack-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: #22c55e;
+  white-space: nowrap;
+}
 .td-empty     { text-align: center; color: #4B5563; padding: 32px !important; }
 
 /* ── Pagination ─────────────────────────────────────────────────── */

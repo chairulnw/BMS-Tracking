@@ -116,6 +116,9 @@ class BatchProcessor:
         self._file_slots_done:   set[str]               = set()  # slot playlist yang sudah selesai
         self._thread: threading.Thread | None = None
         self._offline_reported: set[str]      = set()  # kamera yang sudah dilaporkan offline
+        # System Health (plan2/spesifikasi.md Fase 2) — waktu predict() batch
+        # terakhir, buat tahu kapan BatchProcessor mulai jadi bottleneck.
+        self._batch_ms: "deque[float]" = deque(maxlen=50)
 
         from app.services.stream_service.clip_recorder import _PredictionLogger
         self._pred_logger = _PredictionLogger(PREDICTIONS_CSV)
@@ -245,12 +248,14 @@ class BatchProcessor:
                 # tracker untuk semua kamera (bug Ultralytics di non-stream mode).
                 # Tiap kamera punya BYTETracker sendiri di slot.tracker.
                 active_idx = [i for i, is_new in enumerate(has_new) if is_new]
+                _batch_t0 = time.perf_counter()
                 active_results = self._detector.predict(
                     [batch_frames[i] for i in active_idx],
                     conf=self._conf,
                     classes=[0],
                     verbose=False,
                 )
+                self._batch_ms.append((time.perf_counter() - _batch_t0) * 1000)
                 results: list = [None] * len(self._slots)
                 for i, r in zip(active_idx, active_results):
                     results[i] = r
@@ -413,6 +418,18 @@ class BatchProcessor:
             for slot in self._slots:
                 slot.shutdown()
             self._pred_logger.close()
+
+    def get_metrics(self) -> dict:
+        """System Health (plan2/spesifikasi.md Fase 2) — waktu predict() batch
+        terakhir & rata-rata, buat diagnosa kapan BatchProcessor mulai
+        keteteran sebelum FPS beneran drop."""
+        ms = list(self._batch_ms)
+        return {
+            "last_batch_ms":    ms[-1] if ms else None,
+            "avg_batch_ms":     sum(ms) / len(ms) if ms else None,
+            "cameras_active":   sum(1 for s in self._slots if s.online),
+            "cameras_total":    len(self._slots),
+        }
 
     def _finalize_tracklets(self, closed: list[dict]) -> None:
         """Tracklet baru saja ditutup (lihat pipeline_service.py._resolve_tracklet).

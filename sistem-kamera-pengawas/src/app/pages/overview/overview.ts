@@ -50,6 +50,7 @@ interface CameraEvent {
   description:  string | null;
   snapshot_url: string | null;
   timestamp:    string;
+  acknowledged: boolean;
 }
 
 @Component({
@@ -85,7 +86,7 @@ export class Dashboard implements OnInit {
   filterCategory   = '';
 
   readonly EVENT_TYPES = [
-    'person_detected', 'zone_entry', 'camera_offline', 'camera_online', 'after_hours_activity',
+    'person_detected', 'zone_entry', 'camera_offline', 'camera_online',
   ];
 
   ngOnInit(): void {
@@ -148,6 +149,13 @@ export class Dashboard implements OnInit {
   cameraName(camera_id: string | null): string {
     if (!camera_id) return '—';
     return this.cameras.find(c => c.camera_id === camera_id)?.name ?? camera_id;
+  }
+
+  acknowledge(ev: CameraEvent): void {
+    this.http.patch<CameraEvent>(`${API}/camera-events/${ev.id}/ack`, {}).subscribe({
+      next: updated => { ev.acknowledged = updated.acknowledged; },
+      error: () => {},
+    });
   }
 
   private _loadEvents(): void {

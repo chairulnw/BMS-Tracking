@@ -1,13 +1,7 @@
 from pydantic import BaseModel
 
 DEFAULT_CONF_THRESHOLD = 0.6
-ASSOC_THRESHOLD        = 0.66  # dipakai juga sebagai default reid_threshold; lihat pipeline_service.py
-# Dituning (T2.12) via ai-service/evaluate_tuning.py terhadap sample3/output.csv:
-# 0.62 (lama) → false merge 2, false split 4 dari 5 orang GT (1 identitas
-# menggabungkan 4 orang berbeda). 0.66 → false merge 0, false split 3.
-# >0.66 (dicoba 0.68, 0.72) split makin parah tanpa mengurangi merge lagi
-# (sudah 0 dari 0.66). Lihat juga T_NEAR di pipeline_service.py.
-
+ASSOC_THRESHOLD        = 0.66 
 
 class LineConfig(BaseModel):
     p1: tuple[int, int]
@@ -39,14 +33,18 @@ class ProcessVideoResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     models_loaded: bool
+    cpu_percent:      float | None = None
+    ram_percent:      float | None = None
+    last_batch_ms:    float | None = None
+    avg_batch_ms:     float | None = None
+    cameras_active:   int | None = None
+    cameras_total:    int | None = None
 
 
 class StreamStartRequest(BaseModel):
     line:           LineConfig | None = None 
     conf_threshold: float             = DEFAULT_CONF_THRESHOLD
     reid_threshold: float             = ASSOC_THRESHOLD
-    # Override bobot association score (Fase 2) — kosongkan untuk pakai default
-    # modul (lihat ai-service/app/services/pipeline_service.py). Dipakai T2.12.
     w_reid:         float | None      = None
     w_time:         float | None      = None
     w_cam:          float | None      = None

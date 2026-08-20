@@ -211,6 +211,9 @@ class StreamManager:
             rtsp_configured  = bool(self._slots) or bool(os.getenv("RTSP_URLS", "").strip()),
         )
 
+    def get_batch_metrics(self) -> dict | None:
+        return self._processor.get_metrics() if self._processor else None
+
     def get_snapshot(self, camera_id: str) -> "np.ndarray | None":
         for slot in self._slots:
             if slot.camera_id == camera_id and slot.last_frame is not None:

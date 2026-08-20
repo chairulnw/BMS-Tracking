@@ -21,7 +21,7 @@
 
     <div class="stat-card">
       <div class="stat-card__top">
-        <div class="stat-card__label">TOTAL RUANGAN</div>
+        <div class="stat-card__label">TOTAL ZONA</div>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
           <rect x="3" y="4" width="18" height="18" rx="2" stroke="#6A7282" stroke-width="1.6"/>
           <path d="M3 9h18M8 4v5M16 4v5" stroke="#6A7282" stroke-width="1.6" stroke-linecap="round"/>
@@ -65,12 +65,12 @@
 
   </div>
 
-  <!-- ── Middle row: Ruangan + Lokasi Penghuni ───────────────────── -->
+  <!-- ── Middle row: Zona + Lokasi Penghuni ───────────────────── -->
   <div class="mid-row">
 
-    <!-- Ruangan -->
+    <!-- Zona -->
     <div class="card">
-      <div class="card__header">Ruangan</div>
+      <div class="card__header">Zona</div>
       <div class="room-list">
         @for (room of topOccupancy; track room.zone_id) {
           <div class="room-row">
@@ -208,11 +208,14 @@
                 {{ ev.category.toUpperCase() }}
               </span>
             </td>
-            <td>
+            <td class="td-aksi">
               @if (ev.snapshot_url) {
                 <a class="btn-lihat" [href]="ev.snapshot_url | authUrl" target="_blank">LIHAT</a>
+              }
+              @if (ev.acknowledged) {
+                <span class="ack-badge">Ditindaklanjuti</span>
               } @else {
-                <span class="td-no-action">-</span>
+                <button class="btn-ack" (click)="acknowledge(ev)">Tandai selesai</button>
               }
             </td>
           </tr>

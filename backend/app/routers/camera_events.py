@@ -1,6 +1,6 @@
 from datetime import date, datetime, timezone
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.notify import notify_telegram
 from app.schemas import CameraEventCreate, CameraEventResponse, StatsToday
@@ -31,6 +31,24 @@ async def create_camera_event(req: CameraEventCreate, request: Request) -> Camer
     return {**dict(row), "camera_name": cam["name"] if cam else None}
 
 
+@router.patch("/camera-events/{event_id}/ack", response_model=CameraEventResponse)
+async def acknowledge_camera_event(event_id: int, request: Request) -> CameraEventResponse:
+    pool = request.app.state.pool
+    row = await pool.fetchrow(
+        """
+        UPDATE camera_events
+           SET acknowledged = TRUE, acknowledged_at = NOW()
+         WHERE id = $1
+        RETURNING *
+        """,
+        event_id,
+    )
+    if not row:
+        raise HTTPException(404, "Event not found")
+    cam = await pool.fetchrow("SELECT name FROM cameras WHERE camera_id = $1", row["camera_id"])
+    return {**dict(row), "camera_name": cam["name"] if cam else None}
+
+
 @router.get("/camera-events")
 async def list_camera_events(
     request: Request,
@@ -38,13 +56,15 @@ async def list_camera_events(
     camera_id:   str | None = Query(None),
     event_type:  str | None = Query(None),
     category:    str | None = Query(None),
+    acknowledged: bool | None = Query(None),
     page:        int        = Query(1, ge=1),
     limit:       int        = Query(4, ge=1, le=100),
 ) -> dict:
+    from zoneinfo import ZoneInfo
     pool     = request.app.state.pool
-    date_val = date_filter or datetime.now(timezone.utc).date()
+    date_val = date_filter or datetime.now(ZoneInfo("Asia/Jakarta")).date()
 
-    conditions: list[str] = ["(ce.timestamp AT TIME ZONE 'UTC')::date = $1"]
+    conditions: list[str] = ["(ce.timestamp AT TIME ZONE 'Asia/Jakarta')::date = $1"]
     params: list           = [date_val]
     idx = 2
 
@@ -54,6 +74,8 @@ async def list_camera_events(
         conditions.append(f"ce.event_type = ${idx}"); params.append(event_type); idx += 1
     if category:
         conditions.append(f"ce.category = ${idx}"); params.append(category); idx += 1
+    if acknowledged is not None:
+        conditions.append(f"ce.acknowledged = ${idx}"); params.append(acknowledged); idx += 1
 
     where  = " AND ".join(conditions)
     offset = (page - 1) * limit
@@ -83,18 +105,19 @@ async def list_camera_events(
 
 @router.get("/stats/today", response_model=StatsToday)
 async def stats_today(request: Request) -> StatsToday:
+    from zoneinfo import ZoneInfo
     pool  = request.app.state.pool
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(ZoneInfo("Asia/Jakarta")).date()
 
     cams = await pool.fetchrow(
         "SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE is_active) AS active FROM cameras"
     )
     events_count = await pool.fetchval(
-        "SELECT COUNT(*) FROM camera_events WHERE (timestamp AT TIME ZONE 'UTC')::date = $1",
+        "SELECT COUNT(*) FROM camera_events WHERE (timestamp AT TIME ZONE 'Asia/Jakarta')::date = $1",
         today,
     )
     det_count = await pool.fetchval(
-        "SELECT COUNT(*) FROM detections WHERE (timestamp AT TIME ZONE 'UTC')::date = $1",
+        "SELECT COUNT(*) FROM detections WHERE (timestamp AT TIME ZONE 'Asia/Jakarta')::date = $1",
         today,
     )
     person_rows = await pool.fetch(
@@ -104,7 +127,7 @@ async def stats_today(request: Request) -> StatsToday:
         WHERE  EXISTS (
             SELECT 1 FROM detections d
             WHERE  d.person_id = p.id
-              AND  (d.timestamp AT TIME ZONE 'UTC')::date = $1
+              AND  (d.timestamp AT TIME ZONE 'Asia/Jakarta')::date = $1
         )
         GROUP BY p.is_known
         """,

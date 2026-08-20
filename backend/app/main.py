@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 load_dotenv()
 
 from app.auth import get_current_user
+from app.retention import start_background as start_db_retention
 from app.routers import auth, camera_events, cameras, detections, people, persons, thumbnails, tracklets, zones
 
 
@@ -33,7 +34,9 @@ async def lifespan(app: FastAPI):
            AND rtsp_url ~ '/unicast/'
         """
     )
+    retention_task = await start_db_retention(app.state.pool)
     yield
+    retention_task.cancel()
     await app.state.pool.close()
 
 

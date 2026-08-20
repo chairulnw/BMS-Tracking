@@ -171,7 +171,7 @@ CREATE INDEX IF NOT EXISTS idx_occupancy_events_person       ON occupancy_events
 CREATE TABLE IF NOT EXISTS camera_events (
     id           SERIAL PRIMARY KEY,
     camera_id    VARCHAR(50) NOT NULL,
-    event_type   VARCHAR(50) NOT NULL,  -- 'person_detected' | 'zone_entry' | 'camera_offline' | 'camera_online' | 'after_hours_activity'
+    event_type   VARCHAR(50) NOT NULL,  -- 'person_detected' | 'zone_entry' | 'camera_offline' | 'camera_online'
     category     VARCHAR(20) NOT NULL DEFAULT 'info',  -- 'critical' | 'warning' | 'info'
     description  TEXT,
     snapshot_url TEXT,
@@ -182,6 +182,10 @@ CREATE TABLE IF NOT EXISTS camera_events (
 CREATE INDEX IF NOT EXISTS idx_camera_events_timestamp ON camera_events (timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_camera_events_camera    ON camera_events (camera_id);
 CREATE INDEX IF NOT EXISTS idx_camera_events_category  ON camera_events (category);
+
+-- Alarm ack/unack (plan2/spesifikasi.md Fase 3)
+ALTER TABLE camera_events ADD COLUMN IF NOT EXISTS acknowledged    BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE camera_events ADD COLUMN IF NOT EXISTS acknowledged_at TIMESTAMPTZ;
 
 -- ── Tracklets (Fase 2 — asosiasi identitas level-tracklet) ──────────────────
 

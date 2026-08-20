@@ -239,6 +239,8 @@ class CameraEventResponse(BaseModel):
     snapshot_url: str | None
     person_label: str | None
     timestamp:    datetime
+    acknowledged:    bool
+    acknowledged_at: datetime | None
 
 
 class StatsToday(BaseModel):
