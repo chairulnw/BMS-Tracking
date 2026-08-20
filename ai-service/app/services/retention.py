@@ -9,7 +9,7 @@ from pathlib import Path
 CLIPS_DIR      = Path("output/clips")
 THUMBNAILS_DIR = Path("thumbnails")  # termasuk thumbnails/events/ (rglob)
 
-RETENTION_DAYS         = float(os.getenv("RETENTION_DAYS", "14"))
+RETENTION_DAYS         = float(os.getenv("RETENTION_DAYS", "30"))
 # ponytail: cap ukuran folder project sendiri (GB), BUKAN persentase disk
 # seluruh sistem — disk Mac/server bisa 90%+ penuh gara-gara hal lain sama
 # sekali (OS, app lain) yang gak ada hubungannya sama clip/thumbnail di sini.

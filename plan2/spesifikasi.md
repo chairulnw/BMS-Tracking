@@ -111,7 +111,7 @@ Tidak ada kerjaan terbuka di area ini kecuali muncul bug baru.
 
 ---
 
-## Fase 4 — Kapasitas & integrasi
+## Fase 4 — Kapasitas
 
 - [ ] **Sedang** — dashboard kapasitas admin-facing (estimasi GB/hari,
       proyeksi kapan disk habis); belum ada tempat lihat ini dari UI
@@ -121,33 +121,9 @@ Tidak ada kerjaan terbuka di area ini kecuali muncul bug baru.
       dari `DB_RETENTION_DAYS` (default 90 hari), background task dari
       `main.py` lifespan, jalan tiap `DB_CLEANUP_INTERVAL_HOURS` (default 24j)
       *(Storage Management)*
-- [ ] **Sedang, belum bisa dikerjakan** — dokumentasi kapasitas: berapa
-      kamera max per instance `BatchProcessor` sebelum FPS drop. Butuh
-      benchmark nyata dengan beban kamera sungguhan, bukan sesuatu yang bisa
-      dikode — tapi metric `avg_batch_ms` di atas (System Health) sekarang
-      jadi alat ukurnya begitu ada beban live
-- [ ] **Sedang** — ONVIF discovery/PTZ kalau ada kamera yang mendukung —
-      sekarang cuma RTSP statis dari tabel `cameras`
 
 **Definition of Done**
 - [ ] Ada angka konkret "N kamera = X% CPU/GPU" untuk sizing hardware selanjutnya
 - [ ] Admin bisa lihat proyeksi kapasitas disk dari UI
-
----
-
-## Fase 5
-
-- [ ] **System Configuration** — tidak ada tabel settings maupun UI untuk
-      threshold. `conf_threshold`/`reid_threshold` cuma parameter
-      `POST /stream/start`, default hardcode di `schemas.py`. Ganti threshold
-      = ubah kode + restart. Fitur standar di VMS lain (Milestone Management
-      Client, Genetec Config Tool, Hikvision System Settings), jadi layak
-      dibangun — **tapi tidak perlu halaman baru**: cukup section kecil
-      "Pengaturan Sistem" di halaman `/camera` yang sudah ada (reuse, bukan
-      route terpisah). Tombol start/stop stream global **sengaja tidak**
-      dikembalikan — lihat catatan "Kontrol per-kamera" di atas.
-
-**Definition of Done**
-- [ ] Admin bisa ubah threshold dari UI tanpa restart service
 
 ---
