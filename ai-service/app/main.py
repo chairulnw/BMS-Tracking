@@ -11,9 +11,12 @@ from ultralytics import YOLO
 
 load_dotenv()   # baca .env sebelum apapun
 
+import threading
+
 from app.auth import get_current_user
 from app.routers import clips, health, identities, snapshot, stream, video
 from app.schemas import DEFAULT_CONF_THRESHOLD, ASSOC_THRESHOLD
+from app.services import retention
 from app.services.stream_service import StreamManager
 
 YOLO_MODEL = "yolo26n.pt"
@@ -56,9 +59,13 @@ async def lifespan(app: FastAPI):
     except RuntimeError as exc:
         print(f"[startup] stream tidak auto-start: {exc}")
 
+    retention_stop = threading.Event()
+    retention.start_background(retention_stop)
+
     yield
 
     print("[shutdown] stopping stream (if running)…")
+    retention_stop.set()
     app.state.stream_manager.stop()
     app.state.detector  = None
     app.state.extractor = None

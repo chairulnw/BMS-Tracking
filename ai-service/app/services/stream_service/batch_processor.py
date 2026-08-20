@@ -235,16 +235,25 @@ class BatchProcessor:
                     time.sleep(0.02)
                     continue
 
-                # ── Batch YOLO detect — 1 GPU call untuk semua kamera ────────
+                # ── Batch YOLO detect — 1 GPU call, HANYA kamera yang punya
+                # frame baru siklus ini. Kamera offline (permanen atau lagi
+                # reconnect) numpang di batch_frames sebagai placeholder demi
+                # alignment index dengan self._slots, tapi tidak pernah masuk
+                # predict() — dulu ikut ke-infer padahal cuma frame hitam,
+                # buang GPU/CPU cycle selama kamera itu mati.
                 # Pakai predict() bukan track() karena batch track() berbagi 1
                 # tracker untuk semua kamera (bug Ultralytics di non-stream mode).
                 # Tiap kamera punya BYTETracker sendiri di slot.tracker.
-                results = self._detector.predict(
-                    batch_frames,
+                active_idx = [i for i, is_new in enumerate(has_new) if is_new]
+                active_results = self._detector.predict(
+                    [batch_frames[i] for i in active_idx],
                     conf=self._conf,
                     classes=[0],
                     verbose=False,
                 )
+                results: list = [None] * len(self._slots)
+                for i, r in zip(active_idx, active_results):
+                    results[i] = r
 
                 # ── Per-camera post-processing ────────────────────────────────
                 for slot, result, is_new in zip(self._slots, results, has_new):

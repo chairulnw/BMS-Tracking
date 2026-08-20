@@ -118,12 +118,41 @@ def test_count_restored_after_gallery_reload():
     print(f"  ok: _count dipulihkan ke 4, tracklet baru dapat {result['display_name']!r} (bukan tabrakan)")
 
 
+def test_reversed_resolve_order_still_matches():
+    """Regresi: tracklet yang mulai lebih awal dari sighting terakhir gallery,
+    tapi baru SELESAI DIPROSES belakangan (urutan resolve lintas kamera bisa
+    meleset dari urutan kejadian aslinya — lihat plan/08-pipeline-flow.md §9b),
+    dt jadi negatif walau interval-nya TIDAK beririsan. Sebelum fix, _f_time
+    mengembalikan 0.0 untuk dt<0 dan menjatuhkan skor di bawah threshold
+    walau kemiripan visual tinggi (kasus nyata: Unknown #1 vs #6, 2026-08-20)."""
+    db = IdentityDB(reid_threshold=ASSOC_THRESHOLD, w_reid=0.70, w_time=0.15, w_cam=0.15)
+    t0 = datetime(2026, 8, 20, 22, 42, tzinfo=timezone.utc)
+
+    emb = _unit(3)
+    # "Unknown #1": terlihat 22:42:18-24, SUDAH di-gallery (resolve duluan).
+    db._embeddings["Unknown #1"] = [{"emb": emb, "last_match": t0, "cam_id": "c8"}]
+    db._last_interval["Unknown #1"] = (t0 + timedelta(seconds=18), t0 + timedelta(seconds=24))
+    db._last_cam["Unknown #1"] = "c8"
+    db._camera_group = {"c8": 4, "c9": 4}   # satu grup kamera → p_cam=0.8
+
+    # Tracklet baru: video-time-nya LEBIH AWAL (22:42:02-17) — TIDAK beririsan
+    # dengan Unknown #1 (17 < 18) — tapi baru diproses/resolve SEKARANG,
+    # setelah Unknown #1. Embedding sama (orang yang sama secara visual).
+    query_tl = _tl("c9", 7, t0 + timedelta(seconds=2), t0 + timedelta(seconds=17), emb)
+
+    name, score = db.associate(emb, query_tl)
+    assert name == "Unknown #1", f"harusnya match ke Unknown #1 (dt<0 tapi non-overlap), dapat {name!r} (score={score:.3f})"
+    assert score >= db.threshold, f"score {score:.3f} harus lolos threshold {db.threshold}"
+    print(f"  ok: dt<0 non-overlap tetap match ({name!r}, score={score:.3f})")
+
+
 if __name__ == "__main__":
     tests = [
         test_below_threshold_returns_none,
         test_overlapping_tracklets_never_merge,
         test_empty_samples_discarded,
         test_count_restored_after_gallery_reload,
+        test_reversed_resolve_order_still_matches,
     ]
     for t in tests:
         print(f"{t.__name__} ...")

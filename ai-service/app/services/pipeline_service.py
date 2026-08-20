@@ -96,8 +96,13 @@ def _overlaps(a: tuple[datetime, datetime], b: tuple[datetime, datetime]) -> boo
 
 
 def _f_time(dt: float) -> float:
-    if dt < 0:
-        return 0.0     # tumpang tindih — seharusnya sudah difilter hard constraint
+    # dt negatif BUKAN berarti dua tracklet tumpang tindih (itu sudah dicegat
+    # _overlaps() lebih dulu) — bisa juga cuma tracklet yang lagi resolve
+    # kebetulan mulai lebih awal dari sighting terakhir kandidat, tapi selesai
+    # DIPROSES belakangan (urutan resolve beda kamera bisa meleset dari urutan
+    # kejadian aslinya, terutama mode file-playlist — lihat plan/08-pipeline-
+    # flow.md §9b). Pakai jarak absolut, bukan dianggap "tidak wajar".
+    dt = abs(dt)
     if dt <= T_NEAR:
         return 1.0
     if dt >= T_FAR:

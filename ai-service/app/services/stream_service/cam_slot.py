@@ -22,8 +22,12 @@ from ultralytics.trackers.byte_tracker import BYTETracker
 from app.services.pipeline_service import IdentityDB
 from app.services.stream_service.clip_recorder import _CLIP_STOP, ClipRecorder
 
-RECONNECT_TRIES = 5
-RECONNECT_DELAY = 2.0
+RECONNECT_TRIES = 5      # percobaan cepat sebelum lapor camera_offline
+RECONNECT_DELAY = 2.0    # jeda antar percobaan cepat
+# ponytail: interval tetap pasca-give-up, bukan exponential backoff — cukup
+# buat retry tanpa-batas (VMS lain umumnya begini); upgrade ke backoff kalau
+# reconnect storm (banyak kamera mati bareng) jadi masalah nyata.
+BACKGROUND_RETRY_DELAY = 30.0
 
 
 def _camera_id_from_url(url: str) -> str:
@@ -145,7 +149,11 @@ class _CamSlot:
         return True
 
     def start_reconnect(self, done_cb) -> None:
-        """Reconnect async agar batch loop tidak berhenti menunggu."""
+        """Reconnect async agar batch loop tidak berhenti menunggu. Tidak
+        pernah give-up permanen: percobaan cepat (RECONNECT_TRIES) untuk lapor
+        offline secepatnya, lalu lanjut coba di background tiap
+        BACKGROUND_RETRY_DELAY selama service masih jalan — begitu kamera
+        beneran nyala lagi, otomatis connect tanpa restart manual."""
         self.online = False
 
         def _worker():
@@ -155,21 +163,26 @@ class _CamSlot:
             if self._cap:
                 self._cap.release()
                 self._cap = None
-            for attempt in range(1, RECONNECT_TRIES + 1):
+            attempt = 0
+            while not self._stop_event.is_set():
+                attempt += 1
+                delay = RECONNECT_DELAY if attempt <= RECONNECT_TRIES else BACKGROUND_RETRY_DELAY
+                print(f"[{self.camera_id}] reconnect attempt {attempt} (jeda {delay:.0f}s)…")
+                time.sleep(delay)
                 if self._stop_event.is_set():
                     return
-                print(f"[{self.camera_id}] reconnect {attempt}/{RECONNECT_TRIES}…")
-                time.sleep(RECONNECT_DELAY)
                 cap = _open_capture(self._rtsp_url)
                 if cap is not None:
                     self._cap = cap
                     self.fps  = cap.get(cv2.CAP_PROP_FPS) or self.fps
                     self._launch_capture()
-                    print(f"[{self.camera_id}] reconnected.")
+                    print(f"[{self.camera_id}] reconnected setelah {attempt} percobaan.")
                     done_cb(self, success=True)
                     return
-            print(f"[{self.camera_id}] reconnect gagal.")
-            done_cb(self, success=False)
+                if attempt == RECONNECT_TRIES:
+                    print(f"[{self.camera_id}] {RECONNECT_TRIES}x gagal — lapor offline, "
+                          f"tetap coba reconnect di background tiap {BACKGROUND_RETRY_DELAY:.0f}s.")
+                    done_cb(self, success=False)
 
         threading.Thread(target=_worker, daemon=True, name=f"recon-{self.camera_id}").start()
 
