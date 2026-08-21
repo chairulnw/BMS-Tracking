@@ -16,8 +16,8 @@ import numpy as np
 import torch
 import torchreid
 
-SAMPLE_DIR = Path("sample3")
-GT_PATH    = Path("sample3/output.csv")
+SAMPLE_DIR = Path("sample")
+GT_PATH    = Path("sample/output.csv")
 
 
 def load_crops() -> dict[str, list[np.ndarray]]:

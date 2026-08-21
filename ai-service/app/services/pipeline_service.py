@@ -52,9 +52,9 @@ def _debug_reid() -> bool:
 # Semua angka di bawah ini tebakan awal — wajib dituning terhadap predictions.csv
 # di mode file-playlist (T2.12). Bisa dioverride lewat StreamStartRequest.
 
-W_REID                 = 0.70
-W_TIME                 = 0.15
-W_CAM                  = 0.15
+W_REID                 = 1
+W_TIME                 = 0
+W_CAM                  = 0
 # ASSOC_THRESHOLD didefinisikan di app.schemas (satu sumber, dipakai juga sebagai
 # default reid_threshold di ProcessVideoRequest/StreamStartRequest).
 T_NEAR                 = 180.0    # detik — jeda ini dianggap masuk akal untuk pindah kamera

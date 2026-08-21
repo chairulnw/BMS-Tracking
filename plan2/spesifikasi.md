@@ -89,7 +89,11 @@ Tidak ada kerjaan terbuka di area ini kecuali muncul bug baru.
       `BatchProcessor.get_metrics()`, rolling window 50 batch) *(System Health)*
 
 **Definition of Done**
-- [ ] Restart AI-service pertengahan recording → clip sebelumnya tetap valid, tidak corrupt
+- [x] Restart AI-service pertengahan recording → clip sebelumnya tetap valid,
+      tidak corrupt — **diverifikasi 2026-08-21**: self-check
+      `python app/services/stream_service/clip_recorder.py` — `force_stop()`
+      pertengahan RECORDING (jalur yang sama dipakai lifespan shutdown saat
+      SIGTERM) finalize `.avi` yang kebuka ulang dengan frame count benar
 - [x] `/occupancy` dan `/persons` pakai timezone yang sama untuk tanggal yang sama
 - [x] Ada angka konkret CPU/RAM/batch-time yang bisa dipantau, bukan cuma boolean `/health`
 
@@ -113,9 +117,6 @@ Tidak ada kerjaan terbuka di area ini kecuali muncul bug baru.
 
 ## Fase 4 — Kapasitas
 
-- [ ] **Sedang** — dashboard kapasitas admin-facing (estimasi GB/hari,
-      proyeksi kapan disk habis); belum ada tempat lihat ini dari UI
-      *(Storage Management)*
 - [x] Retention policy untuk tabel DB — **selesai 2026-08-21**:
       `backend/app/retention.py`, hapus `detections`/`tracklets` lebih tua
       dari `DB_RETENTION_DAYS` (default 90 hari), background task dari
@@ -124,6 +125,5 @@ Tidak ada kerjaan terbuka di area ini kecuali muncul bug baru.
 
 **Definition of Done**
 - [ ] Ada angka konkret "N kamera = X% CPU/GPU" untuk sizing hardware selanjutnya
-- [ ] Admin bisa lihat proyeksi kapasitas disk dari UI
 
 ---

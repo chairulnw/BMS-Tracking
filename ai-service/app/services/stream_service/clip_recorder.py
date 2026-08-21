@@ -247,3 +247,42 @@ class ClipRecorder:
             path.with_suffix(".dur").write_text(f"{duration:.3f}")
         except Exception as exc:
             print(f"[clip:{self._camera_id}] gagal tulis sidecar durasi ({path.name}): {exc}")
+
+
+def _demo() -> None:
+    """ponytail self-check: force_stop() pertengahan RECORDING (jalur yang sama
+    dipakai lifespan shutdown saat SIGTERM, plan2/spesifikasi.md Fase 2 DoD)
+    harus finalize file .avi yang valid & bisa dibaca ulang, bukan corrupt."""
+    import shutil
+    import tempfile
+
+    global CLIPS_DIR
+    tmp = tempfile.mkdtemp()
+    orig_dir = CLIPS_DIR
+    CLIPS_DIR = Path(tmp)
+    try:
+        rec = ClipRecorder("test", fps=10.0, width=64, height=48)
+        frame = np.full((48, 64, 3), 200, dtype=np.uint8)
+        now = time.monotonic()
+        for i in range(5):
+            rec.update(frame, has_person=True, now=now + i * 0.1)
+        rec.force_stop()  # simulasi restart/SIGTERM pertengahan RECORDING
+
+        clips = list(Path(tmp).glob("*.avi"))
+        assert len(clips) == 1, f"expected 1 clip, got {len(clips)}"
+        cap = cv2.VideoCapture(str(clips[0]))
+        assert cap.isOpened(), "clip harusnya bisa dibuka ulang, bukan corrupt"
+        count = 0
+        while cap.read()[0]:
+            count += 1
+        cap.release()
+        assert count == 5, f"expected 5 frame terbaca, got {count}"
+        assert rec._state == ClipRecorder._IDLE, "state harus balik IDLE setelah force_stop"
+    finally:
+        CLIPS_DIR = orig_dir
+        shutil.rmtree(tmp, ignore_errors=True)
+    print("clip_recorder self-check OK")
+
+
+if __name__ == "__main__":
+    _demo()

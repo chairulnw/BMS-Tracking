@@ -12,7 +12,7 @@ import csv
 import collections
 from pathlib import Path
 
-GT_PATH   = Path("sample3/output.csv")
+GT_PATH   = Path("sample/output.csv")
 PRED_PATH = Path("predictions.csv")
 
 

@@ -16,7 +16,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 LOG_PATH  = Path(sys.argv[1] if len(sys.argv) > 1 else "/tmp/ai_tuning.log")
-GT_PATH   = Path("sample3/output.csv")
+GT_PATH   = Path("sample/output.csv")
 PRED_PATH = Path("predictions.csv")
 
 CMP_RE = re.compile(

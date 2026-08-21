@@ -176,7 +176,13 @@ async def create_camera(req: CameraIn, request: Request) -> CameraResponse:
 @router.put("/cameras/{cam_id}", response_model=CameraResponse)
 async def update_camera(cam_id: int, req: CameraIn, request: Request) -> CameraResponse:
     pool = request.app.state.pool
-    camera_id = req.camera_id or _extract_cam_id(req.rtsp_url)
+    # camera_id itu identitas stabil, jangan re-derive dari rtsp_url tiap edit —
+    # kamera file-based (mis. sample/c8_sim vs sample3/c8_sim) share nama folder
+    # yang sama, re-derive di sini bikin update collide sama row lain yang sudah
+    # pakai camera_id itu (UniqueViolationError).
+    camera_id = req.camera_id or await pool.fetchval(
+        "SELECT camera_id FROM cameras WHERE id = $1", cam_id
+    )
 
     group_name = None
     if req.group_id is not None:
