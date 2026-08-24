@@ -107,11 +107,13 @@ class BatchProcessor:
         conf_threshold: float,
         stop_event:     threading.Event,
         auto_stop_cb    = None,
+        skip_backend_persist: bool = False,   # True untuk evaluasi terisolasi
     ) -> None:
         self._slots            = slots
         self._conf             = conf_threshold
         self._stop             = stop_event
         self._auto_stop_cb       = auto_stop_cb
+        self._skip_backend_persist = skip_backend_persist
         self._file_slots_total:  set[str]              = set()  # slot playlist yang berhasil connect
         self._file_slots_done:   set[str]               = set()  # slot playlist yang sudah selesai
         self._thread: threading.Thread | None = None
@@ -434,34 +436,39 @@ class BatchProcessor:
     def _finalize_tracklets(self, closed: list[dict]) -> None:
         """Tracklet baru saja ditutup (lihat pipeline_service.py._resolve_tracklet).
         Simpan thumbnail sekali, lalu POST /detections + /tracklets (+ /camera-events
-        kalau identitas baru)."""
+        kalau identitas baru) — dilewati kalau _skip_backend_persist=True (evaluasi
+        terisolasi), supaya klip evaluasi tidak menulis baris baru ke persons/
+        detections/tracklets di database live."""
         for result in closed:
             cam   = result["cam_id"]
             label = result["label"]
             det_url = None
-            if result["best_crop"] is not None and result["best_crop"].size > 0:
-                det_url = self._save_crop(result["best_crop"], cam, result["track_id"])
+            if not self._skip_backend_persist:
+                if result["best_crop"] is not None and result["best_crop"].size > 0:
+                    det_url = self._save_crop(result["best_crop"], cam, result["track_id"])
 
-            _BackendClient.post_detection(
-                result["display_name"], cam, result["best_conf"], "appearance",
-                det_url, label, result["track_id"],
-                timestamp=result["ended_at"],
-            )
-            _BackendClient.post_tracklet(
-                cam, result["track_id"], label,
-                result["started_at"], result["ended_at"], result["n_detections"],
-                det_url, result["embedding"], result["assoc_score"],
-                par=result["par"], best_crop=result["best_crop"],
-                pos_x=result["pos_x"], pos_y=result["pos_y"],
-                positions=result["positions"],
-            )
-            if result["is_new"]:
-                _BackendClient.post_camera_event(
-                    cam, "person_detected", "info",
-                    person_label=label, snapshot_url=det_url,
+                _BackendClient.post_detection(
+                    result["display_name"], cam, result["best_conf"], "appearance",
+                    det_url, label, result["track_id"],
+                    timestamp=result["ended_at"],
                 )
+                _BackendClient.post_tracklet(
+                    cam, result["track_id"], label,
+                    result["started_at"], result["ended_at"], result["n_detections"],
+                    det_url, result["embedding"], result["assoc_score"],
+                    par=result["par"], best_crop=result["best_crop"],
+                    pos_x=result["pos_x"], pos_y=result["pos_y"],
+                    positions=result["positions"],
+                )
+                if result["is_new"]:
+                    _BackendClient.post_camera_event(
+                        cam, "person_detected", "info",
+                        person_label=label, snapshot_url=det_url,
+                    )
             # Tulis baris predictions.csv yang di-buffer selama tracklet ini
             # terbuka, sekarang dengan nama akhir yang sudah resolve (§6).
+            # Tetap jalan walau _skip_backend_persist=True — inilah yang
+            # dibutuhkan evaluasi akurasi.
             self._pred_logger.flush((cam, result["track_id"]), result["display_name"])
 
     def _on_reconnect(self, slot: _CamSlot, success: bool) -> None:

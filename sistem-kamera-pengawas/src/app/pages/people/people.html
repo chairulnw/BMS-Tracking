@@ -9,7 +9,7 @@
           <path d="M21 21l-4.35-4.35" stroke="#6A7282" stroke-width="2" stroke-linecap="round"/>
         </svg>
         <input class="search-input" type="text" placeholder="Cari nama atau Person ID..."
-          [value]="searchQuery" (input)="onSearchInput($event)" />
+          [value]="searchQuery" (input)="onSearchInput($event)" (keydown)="onSearchKeydown($event)" />
       </div>
 
       <input class="date-input" type="date" [value]="selectedDate" (change)="onDateChange($event)" />
@@ -108,14 +108,14 @@
     </div>
   }
 
-  <!-- ── Section ORANG — dikelompokkan dari deteksi di halaman ini ──────── -->
+  <!-- ── Section ORANG — GET /people/persons, paginasi sendiri ──────────── -->
   <div class="card">
     <div class="card-header">
       <div>
         <h2 class="card-title">Orang</h2>
         <p class="card-sub">Klik untuk membuka riwayat lengkap</p>
       </div>
-      <span class="section-count">{{ orang.length }}</span>
+      <span class="section-count">{{ orangTotal }}</span>
     </div>
 
     <div class="orang-grid">
@@ -140,7 +140,7 @@
               <path d="M6 1a3.5 3.5 0 00-3.5 3.5C2.5 7.5 6 11 6 11s3.5-3.5 3.5-6.5A3.5 3.5 0 006 1z" stroke="#6A7282" stroke-width="1.2"/>
               <circle cx="6" cy="4.5" r="1" fill="#6A7282"/>
             </svg>
-            <span>{{ card.camera_name || cameraName(card.camera_id) }} · {{ fmtTime2(card.timestamp) }}</span>
+            <span>{{ card.camera_location || cameraLocation(card.camera_id) }} · {{ fmtTime2(card.timestamp) }}</span>
           </div>
 
           @if (!card.is_known) {
@@ -173,6 +173,25 @@
         <div class="td-empty">Belum ada orang untuk kriteria ini.</div>
       }
     </div>
+
+    @if (orangPages > 1) {
+      <div class="pagination-bar">
+        <span class="pagination-info">Halaman {{ orangPage }} dari {{ orangPages }}</span>
+        <div class="pagination-btns">
+          <button class="pg-btn" [disabled]="orangPage <= 1" (click)="goToOrangPage(orangPage - 1)">‹</button>
+          @for (p of orangPageNumbers; track $index) {
+            @if (p === '...') {
+              <span class="pg-ellipsis">…</span>
+            } @else {
+              <button [ngClass]="['pg-btn', orangPage === p ? 'pg-btn--active' : '']" (click)="goToOrangPage(p)">
+                {{ p }}
+              </button>
+            }
+          }
+          <button class="pg-btn" [disabled]="orangPage >= orangPages" (click)="goToOrangPage(orangPage + 1)">›</button>
+        </div>
+      </div>
+    }
   </div>
 
   <!-- ── Section DETEKSI — raw, urut waktu, paginated ────────────────────── -->
@@ -201,7 +220,7 @@
             }
             <span class="person-badge">P-{{ item.person_id }}</span>
           </div>
-          <div class="detection-cam">{{ item.camera_name || cameraName(item.camera_id) }}</div>
+          <div class="detection-cam">{{ item.camera_location || cameraLocation(item.camera_id) }}</div>
           <div class="detection-time">{{ fmtDateTime(item.timestamp) }}</div>
         </div>
       } @empty {
@@ -216,10 +235,14 @@
         </span>
         <div class="pagination-btns">
           <button class="pg-btn" [disabled]="page <= 1" (click)="goToPage(page - 1)">‹</button>
-          @for (p of pageNumbers; track p) {
-            <button [ngClass]="['pg-btn', page === p ? 'pg-btn--active' : '']" (click)="goToPage(p)">
-              {{ p }}
-            </button>
+          @for (p of pageNumbers; track $index) {
+            @if (p === '...') {
+              <span class="pg-ellipsis">…</span>
+            } @else {
+              <button [ngClass]="['pg-btn', page === p ? 'pg-btn--active' : '']" (click)="goToPage(p)">
+                {{ p }}
+              </button>
+            }
           }
           <button class="pg-btn" [disabled]="page >= pages" (click)="goToPage(page + 1)">›</button>
         </div>

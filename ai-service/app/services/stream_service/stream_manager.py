@@ -7,7 +7,7 @@ import threading
 import numpy as np
 
 from app.schemas import IdentityRecord, StreamStatusResponse
-from app.services.pipeline_service import W_CAM, W_REID, W_TIME, IdentityDB
+from app.services.pipeline_service import IdentityDB
 from app.services.stream_service.backend_client import _fetch_cameras, _fetch_tracklet_gallery
 from app.services.stream_service.batch_processor import BatchProcessor, load_model_bundle
 from app.services.stream_service.cam_slot import _CamSlot, _camera_id_from_url
@@ -50,9 +50,7 @@ class StreamManager:
         conf_threshold: float,
         reid_threshold: float,
         line           = None,   # legacy, tidak digunakan — garis diambil dari DB
-        w_reid:  "float | None" = None,
-        w_time:  "float | None" = None,
-        w_cam:   "float | None" = None,
+        skip_gallery_restore: bool = False,   # True untuk evaluasi terisolasi
     ) -> None:
         if self._running:
             raise RuntimeError("Stream sudah berjalan. Panggil /stream/stop dulu.")
@@ -74,7 +72,6 @@ class StreamManager:
                         "rtsp_url":          c["rtsp_url"],
                         "name":              c.get("name", ""),
                         "analytics_enabled": c.get("analytics_enabled", True),
-                        "group_id":          c.get("group_id"),
                     }
                     for c in db_cameras
                 ]
@@ -107,14 +104,8 @@ class StreamManager:
             ]
 
             # Shared IdentityDB (PAR extractor wired in setelah models siap)
-            shared_db = IdentityDB(
-                reid_threshold,
-                w_reid=w_reid if w_reid is not None else W_REID,
-                w_time=w_time if w_time is not None else W_TIME,
-                w_cam=w_cam if w_cam is not None else W_CAM,
-            )
+            shared_db = IdentityDB(reid_threshold)
             shared_db._par = models.par
-            shared_db.set_camera_groups({cfg["camera_id"]: cfg.get("group_id") for cfg in cam_configs})
             self._shared_db = shared_db
             for slot in self._slots:
                 slot.db = shared_db
@@ -122,11 +113,17 @@ class StreamManager:
             # Pulihkan gallery ReID hari ini dari DB — supaya restart AI service
             # di tengah hari tidak membuat orang yang sama dapat Person ID baru
             # (plan/07-fase2-detail.md §7). Hanya tracklet hari ini, sesuai ADR-001.
-            gallery_entries = _fetch_tracklet_gallery()
-            if gallery_entries:
-                shared_db.load_gallery(gallery_entries)
-                print(f"[stream] gallery dipulihkan: {len(gallery_entries)} entri, "
-                      f"{len(shared_db._embeddings)} orang")
+            # Dilewati kalau skip_gallery_restore=True (evaluasi terisolasi,
+            # mis. akurasi via file-playlist) — shared_db tetap kosong-baru,
+            # tidak menyentuh atau terpengaruh data live di DB.
+            if skip_gallery_restore:
+                print("[stream] skip_gallery_restore=True — IdentityDB mulai kosong.")
+            else:
+                gallery_entries = _fetch_tracklet_gallery()
+                if gallery_entries:
+                    shared_db.load_gallery(gallery_entries)
+                    print(f"[stream] gallery dipulihkan: {len(gallery_entries)} entri, "
+                          f"{len(shared_db._embeddings)} orang")
 
             # Bangun event chain antar clip berdasarkan urutan timestamp di nama file
             all_clips: list[tuple[_CamSlot, str]] = []
@@ -161,6 +158,7 @@ class StreamManager:
                 conf_threshold = conf_threshold,
                 stop_event     = self._stop_event,
                 auto_stop_cb   = self.stop if has_playlist else None,
+                skip_backend_persist = skip_gallery_restore,
             )
             self._processor.start()
             self._running = True

@@ -2,6 +2,7 @@ import { Component, OnInit, inject } from '@angular/core';
 import { NgClass } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { ActivatedRoute, Router } from '@angular/router';
+import { forkJoin } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { AuthService } from '../../services/auth.service';
 import { AuthUrlPipe } from '../../pipes/auth-url.pipe';
@@ -26,13 +27,14 @@ interface PersonDetail {
 }
 
 interface FeedItem {
-  detection_id:  number;
-  person_id:     number | null;
-  camera_id:     string;
-  camera_name:   string | null;
-  timestamp:     string;
-  thumbnail_url: string | null;
-  tracklet_id:   number | null;
+  detection_id:    number;
+  person_id:       number | null;
+  camera_id:       string;
+  camera_name:     string | null;
+  camera_location: string | null;
+  timestamp:       string;
+  thumbnail_url:   string | null;
+  tracklet_id:     number | null;
 }
 
 interface FeedResponse {
@@ -42,9 +44,23 @@ interface FeedResponse {
   pages: number;
 }
 
+interface CrossingItem {
+  id:           number;
+  timestamp:    string;
+  direction:    string;
+  camera_id:    string | null;
+  camera_name:  string | null;
+  zone_name:    string | null;
+  snapshot_url: string | null;
+}
+
+type TimelineEntry =
+  | { kind: 'detection'; key: string; timestamp: string; data: FeedItem }
+  | { kind: 'event';     key: string; timestamp: string; data: CrossingItem };
+
 interface BucketGroup {
   label: string;
-  items: FeedItem[];
+  items: TimelineEntry[];
 }
 
 interface DateGroup {
@@ -143,32 +159,49 @@ export class PersonInvestigation implements OnInit {
   }
 
   private _loadTimeline(personId: number): void {
-    const params = new URLSearchParams({ person_id: String(personId), page: '1', limit: '100' });
-    this.http.get<FeedResponse>(`${API}/people/feed?${params}`).subscribe({
-      next:  res => this.dateGroups = this._groupByDateAndBucket(res.items),
+    const feedParams = new URLSearchParams({ person_id: String(personId), page: '1', limit: '100' });
+    forkJoin({
+      feed:      this.http.get<FeedResponse>(`${API}/people/feed?${feedParams}`),
+      crossings: this.http.get<CrossingItem[]>(`${API}/persons/${personId}/crossings?limit=100`),
+    }).subscribe({
+      next: ({ feed, crossings }) => {
+        // IN/OUT itu event tersendiri (crossing zona), bukan deteksi biasa —
+        // digabung di sini cuma buat urutan waktu bersama, lalu ditampilkan
+        // sebagai kartu terpisah (lihat template) supaya gak dikira kebetulan
+        // berimpit dengan satu deteksi tertentu.
+        const entries: TimelineEntry[] = [
+          ...feed.items.map(d => ({
+            kind: 'detection' as const, key: `d${d.detection_id}`, timestamp: d.timestamp, data: d,
+          })),
+          ...crossings.map(c => ({
+            kind: 'event' as const, key: `e${c.id}`, timestamp: c.timestamp, data: c,
+          })),
+        ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        this.dateGroups = this._groupByDateAndBucket(entries);
+      },
       error: err => console.error('[person-investigation] timeline error:', err),
     });
   }
 
-  private _groupByDateAndBucket(items: FeedItem[]): DateGroup[] {
-    const byDate = new Map<string, FeedItem[]>();
-    for (const item of items) {
-      const d = new Date(item.timestamp);
+  private _groupByDateAndBucket(entries: TimelineEntry[]): DateGroup[] {
+    const byDate = new Map<string, TimelineEntry[]>();
+    for (const entry of entries) {
+      const d = new Date(entry.timestamp);
       const dateKey = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
       if (!byDate.has(dateKey)) byDate.set(dateKey, []);
-      byDate.get(dateKey)!.push(item);
+      byDate.get(dateKey)!.push(entry);
     }
 
     const groups: DateGroup[] = [];
     for (const dateItems of byDate.values()) {
       const buckets: BucketGroup[] = [];
-      for (const item of dateItems) {
-        const label = this._bucketLabel(item.timestamp);
+      for (const entry of dateItems) {
+        const label = this._bucketLabel(entry.timestamp);
         const last  = buckets[buckets.length - 1];
         if (last && last.label === label) {
-          last.items.push(item);
+          last.items.push(entry);
         } else {
-          buckets.push({ label, items: [item] });
+          buckets.push({ label, items: [entry] });
         }
       }
       groups.push({ dateLabel: this._dateLabel(dateItems[0].timestamp), buckets });
@@ -372,15 +405,17 @@ export class PersonInvestigation implements OnInit {
     const h = Math.floor(seconds / 3600);
     const m = Math.round((seconds % 3600) / 60);
     if (h > 0) return `${h}j ${m}m`;
+    if (seconds < 60) return `${Math.round(seconds)}d`;
     return `${m}m`;
   }
 
-  openFootage(item: FeedItem, event?: Event): void {
+  openFootage(cameraId: string | null, timestamp: string, event?: Event): void {
     event?.stopPropagation();
+    if (!cameraId) return;
     const token  = this.auth.getToken();
-    const params = new URLSearchParams({ timestamp: item.timestamp });
+    const params = new URLSearchParams({ timestamp });
     if (token) params.set('token', token);
-    this.footageUrl = `${AI_API}/clips/${item.camera_id}?${params}`;
+    this.footageUrl = `${AI_API}/clips/${cameraId}?${params}`;
   }
 
   closeFootage(): void {

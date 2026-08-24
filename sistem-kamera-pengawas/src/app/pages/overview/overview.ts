@@ -4,6 +4,7 @@ import { HttpClient } from '@angular/common/http';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { interval } from 'rxjs';
 import { startWith, switchMap } from 'rxjs/operators';
+import { Router } from '@angular/router';
 import { AuthUrlPipe } from '../../pipes/auth-url.pipe';
 import { environment } from '../../../environments/environment';
 
@@ -31,7 +32,9 @@ interface Person {
   name:               string;
   label:              string;
   is_known:           boolean;
+  jabatan:            string | null;
   last_camera:        string | null;
+  last_zone_name:     string | null;
   best_thumbnail_url: string | null;
 }
 
@@ -63,6 +66,7 @@ interface CameraEvent {
 export class Dashboard implements OnInit {
   private http       = inject(HttpClient);
   private destroyRef = inject(DestroyRef);
+  private router     = inject(Router);
 
   stats: Stats = {
     cameras_total: 0, cameras_active: 0, cameras_inactive: 0,
@@ -110,7 +114,13 @@ export class Dashboard implements OnInit {
       takeUntilDestroyed(this.destroyRef),
     ).subscribe({ next: d => this.persons = d.slice(0, 5), error: () => {} });
 
-    this._loadEvents();
+    // "Kejadian Terakhir" tadinya cuma dimuat sekali di awal + manual lewat
+    // tombol filter/paginasi — gak ikut auto-refresh kayak card lain, jadi
+    // kejadian baru gak muncul sampai user klik sesuatu. Disamakan di sini.
+    interval(30000).pipe(
+      startWith(0),
+      takeUntilDestroyed(this.destroyRef),
+    ).subscribe(() => this._loadEvents());
   }
 
   private _loadCameras(): void {
@@ -149,6 +159,18 @@ export class Dashboard implements OnInit {
   cameraName(camera_id: string | null): string {
     if (!camera_id) return '—';
     return this.cameras.find(c => c.camera_id === camera_id)?.name ?? camera_id;
+  }
+
+  personLocation(p: Person): string {
+    return p.last_zone_name ?? this.cameraName(p.last_camera);
+  }
+
+  goToPerson(p: Person): void {
+    this.router.navigate(['/people'], { queryParams: { q: p.name } });
+  }
+
+  goToZone(room: OccupancyRoom): void {
+    this.router.navigate(['/zone'], { queryParams: { zone_id: room.zone_id } });
   }
 
   acknowledge(ev: CameraEvent): void {

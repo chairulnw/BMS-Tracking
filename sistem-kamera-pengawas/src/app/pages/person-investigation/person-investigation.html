@@ -80,18 +80,46 @@
               <div class="bucket-row">
                 <div class="bucket-label">{{ bucket.label }}</div>
                 <div class="bucket-cards">
-                  @for (item of bucket.items; track item.detection_id) {
-                    <div class="snap-card" (click)="openFootage(item, $event)" title="Buka footage">
-                      <div class="snap-thumb">
-                        @if (item.thumbnail_url) {
-                          <img [src]="item.thumbnail_url | authUrl" alt="snapshot" />
-                        } @else {
-                          <div class="thumb-placeholder"></div>
-                        }
-                        <span class="snap-clock">{{ fmtClock(item.timestamp) }}</span>
+                  @for (item of bucket.items; track item.key) {
+                    @if (item.kind === 'detection') {
+                      <div class="snap-card" (click)="openFootage(item.data.camera_id, item.data.timestamp, $event)" title="Buka footage">
+                        <div class="snap-thumb">
+                          @if (item.data.thumbnail_url) {
+                            <img [src]="item.data.thumbnail_url | authUrl" alt="snapshot" />
+                          } @else {
+                            <div class="thumb-placeholder"></div>
+                          }
+                          <span class="snap-clock">{{ fmtClock(item.data.timestamp) }}</span>
+                        </div>
+                        <div class="snap-cam">
+                          <div class="snap-cam-name">{{ item.data.camera_name || item.data.camera_id }}</div>
+                          @if (item.data.camera_location) {
+                            <div class="snap-cam-loc">{{ item.data.camera_location }}</div>
+                          }
+                        </div>
                       </div>
-                      <div class="snap-cam">{{ item.camera_name || item.camera_id }}</div>
-                    </div>
+                    } @else {
+                      <div class="snap-card snap-card--event"
+                           (click)="openFootage(item.data.camera_id, item.data.timestamp, $event)" title="Buka footage">
+                        <div class="snap-thumb">
+                          @if (item.data.snapshot_url) {
+                            <img [src]="item.data.snapshot_url | authUrl" alt="snapshot" />
+                          } @else {
+                            <div class="thumb-placeholder"></div>
+                          }
+                          <span class="snap-clock">{{ fmtClock(item.data.timestamp) }}</span>
+                          <span [ngClass]="['snap-dir', item.data.direction === 'IN' ? 'snap-dir--in' : 'snap-dir--out']">
+                            {{ item.data.direction }}
+                          </span>
+                        </div>
+                        <div class="snap-cam">
+                          <div class="snap-cam-name">{{ item.data.camera_name || item.data.camera_id }}</div>
+                          @if (item.data.zone_name) {
+                            <div class="snap-cam-loc">{{ item.data.zone_name }}</div>
+                          }
+                        </div>
+                      </div>
+                    }
                   }
                 </div>
               </div>

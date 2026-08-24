@@ -73,7 +73,7 @@
       <div class="card__header">Zona</div>
       <div class="room-list">
         @for (room of topOccupancy; track room.zone_id) {
-          <div class="room-row">
+          <div class="room-row" (click)="goToZone(room)" style="cursor: pointer;">
             <span class="room-name">{{ room.zone_name }}</span>
             <span [ngClass]="['room-count', room.current_occupancy > 0 ? 'room-count--active' : '']">
               {{ room.current_occupancy }} Orang
@@ -91,12 +91,12 @@
       <div class="card__header">Lokasi Penghuni</div>
       <div class="penghuni-list">
         @for (p of persons; track p.id) {
-          <div class="penghuni-row">
+          <div class="penghuni-row" (click)="goToPerson(p)" style="cursor: pointer;">
             <div class="penghuni-info">
               <div class="penghuni-name">{{ p.name }}</div>
-              <div class="penghuni-status">{{ p.is_known ? 'KARYAWAN' : 'UNKNOWN' }}</div>
+              <div class="penghuni-status">{{ (p.jabatan || (p.is_known ? 'Karyawan' : 'Unknown')).toUpperCase() }}</div>
             </div>
-            <span class="location-badge">{{ cameraName(p.last_camera) }}</span>
+            <span class="location-badge">{{ personLocation(p) }}</span>
           </div>
         }
         @empty {

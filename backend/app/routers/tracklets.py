@@ -64,6 +64,25 @@ async def create_tracklet(req: TrackletCreate, request: Request) -> TrackletResp
             row["id"], req.camera_id, person_id,
         )
 
+        # Crossing events dikirim SAAT terjadi, sebelum tracklet-nya ditutup —
+        # identitasnya belum ada, jadi person_label selalu NULL di situ (lihat
+        # komentar batch_processor.py). Begitu tracklet ini resolve, backfill
+        # event yang jatuh dalam rentang waktunya supaya "Sedang Berada di
+        # Zona" & riwayat kejadian ikut terisi nama/fotonya. Longgar ±2 detik
+        # di kedua ujung — crossing di frame terakhir bisa ke-timestamp SEDIKIT
+        # setelah ended_at (track hilang di frame yang sama saat garis dilewati).
+        await pool.execute(
+            """
+            UPDATE occupancy_events
+            SET person_label = $1
+            WHERE camera_id = $2 AND track_id = $3
+              AND person_label IS NULL
+              AND timestamp BETWEEN $4::timestamptz - interval '2 seconds'
+                                AND $5::timestamptz + interval '2 seconds'
+            """,
+            req.person_label, req.camera_id, req.track_id, req.started_at, req.ended_at,
+        )
+
     return dict(row)
 
 

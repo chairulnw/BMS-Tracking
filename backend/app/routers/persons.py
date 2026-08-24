@@ -6,8 +6,8 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.auth import create_access_token
 from app.schemas import (
-    CameraPoint, DwellRecord, MovementRecord, NameSuggestion, PersonDetail,
-    PersonResponse, PersonUpdate, RenameRequest, TrajectoryPoint,
+    CameraPoint, DwellRecord, MovementRecord, NameSuggestion, PersonCrossingResponse,
+    PersonDetail, PersonResponse, PersonUpdate, RenameRequest, TrajectoryPoint,
 )
 
 router = APIRouter(prefix="/persons", tags=["persons"])
@@ -64,10 +64,18 @@ async def list_persons(
     where = " AND ".join(conditions)
     rows = await pool.fetch(
         f"""
-        SELECT p.*, c.name AS last_camera_name,
+        SELECT p.*, c.name AS last_camera_name, z.name AS last_zone_name,
                (SELECT COUNT(*) FROM detections d WHERE d.person_id = p.id) AS observation_count
         FROM persons p
         LEFT JOIN cameras c ON c.camera_id = p.last_camera
+        LEFT JOIN LATERAL (
+            SELECT zn.name
+            FROM zone_cameras zc2
+            JOIN zones zn ON zn.id = zc2.zone_id
+            WHERE zc2.camera_id = c.id
+            ORDER BY zn.id
+            LIMIT 1
+        ) z ON true
         WHERE {where}
         ORDER BY p.last_seen DESC NULLS LAST
         """,
@@ -81,10 +89,18 @@ async def get_person(person_id: int, request: Request) -> PersonDetail:
     pool = request.app.state.pool
     row = await pool.fetchrow(
         """
-        SELECT p.*, c.name AS last_camera_name,
+        SELECT p.*, c.name AS last_camera_name, z.name AS last_zone_name,
                (SELECT COUNT(*) FROM detections d WHERE d.person_id = p.id) AS observation_count
         FROM persons p
         LEFT JOIN cameras c ON c.camera_id = p.last_camera
+        LEFT JOIN LATERAL (
+            SELECT zn.name
+            FROM zone_cameras zc2
+            JOIN zones zn ON zn.id = zc2.zone_id
+            WHERE zc2.camera_id = c.id
+            ORDER BY zn.id
+            LIMIT 1
+        ) z ON true
         WHERE p.id = $1
         """,
         person_id,
@@ -221,6 +237,36 @@ async def get_movements(
         ))
 
     return result
+
+
+@router.get("/{person_id}/crossings", response_model=list[PersonCrossingResponse])
+async def get_crossings(
+    person_id: int, request: Request, limit: int = Query(200, ge=1, le=500),
+) -> list[PersonCrossingResponse]:
+    """Event IN/OUT (zone crossing) milik orang ini — dipakai tab Timeline
+    biar tampil sebagai kartu TERPISAH dari deteksi biasa, bukan ditebak lewat
+    kedekatan waktu ke satu deteksi tertentu."""
+    pool = request.app.state.pool
+    exists = await pool.fetchval("SELECT id FROM persons WHERE id = $1", person_id)
+    if not exists:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    rows = await pool.fetch(
+        """
+        SELECT oe.id, oe.timestamp, oe.direction, oe.camera_id, oe.snapshot_url,
+               c.name AS camera_name, z.name AS zone_name
+        FROM occupancy_events oe
+        JOIN persons p            ON p.label = oe.person_label
+        LEFT JOIN cameras c       ON c.camera_id = oe.camera_id
+        LEFT JOIN zone_cameras zc ON zc.id = oe.zone_camera_id
+        LEFT JOIN zones z         ON z.id = zc.zone_id
+        WHERE p.id = $1
+        ORDER BY oe.timestamp DESC
+        LIMIT $2
+        """,
+        person_id, limit,
+    )
+    return [dict(r) for r in rows]
 
 
 @router.get("/{person_id}/trajectory", response_model=list[TrajectoryPoint])

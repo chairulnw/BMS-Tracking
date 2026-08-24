@@ -42,12 +42,13 @@ class HealthResponse(BaseModel):
 
 
 class StreamStartRequest(BaseModel):
-    line:           LineConfig | None = None 
-    conf_threshold: float             = DEFAULT_CONF_THRESHOLD
-    reid_threshold: float             = ASSOC_THRESHOLD
-    w_reid:         float | None      = None
-    w_time:         float | None      = None
-    w_cam:          float | None      = None
+    line:                  LineConfig | None = None
+    conf_threshold:        float             = DEFAULT_CONF_THRESHOLD
+    reid_threshold:        float             = ASSOC_THRESHOLD
+    # ponytail: true untuk evaluasi terisolasi (mis. file-playlist akurasi) —
+    # gallery hari ini TIDAK dipulihkan dari DB, IdentityDB mulai kosong.
+    # Default false: perilaku produksi tidak berubah.
+    skip_gallery_restore:  bool              = False
 
 
 class RenameRequest(BaseModel):

@@ -418,6 +418,9 @@
 
 .snap-card:hover .snap-thumb { border-color: rgba(231,0,11,0.5); }
 
+.snap-card--event .snap-thumb { border-color: rgba(255,255,255,0.18); border-style: dashed; }
+.snap-card--event:hover .snap-thumb { border-color: rgba(255,255,255,0.35); }
+
 .snap-thumb img {
   width: 100%;
   height: 100%;
@@ -437,11 +440,29 @@
 }
 
 .snap-cam {
-  font-size: 11px;
-  color: #6A7282;
   margin-top: 4px;
   text-align: center;
+}
+
+.snap-cam-name, .snap-cam-loc {
+  font-size: 11px;
+  color: #6A7282;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.snap-cam-loc { color: #4B5563; }
+
+.snap-dir {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font-size: 9px;
+  font-weight: 600;
+  border-radius: 4px;
+  padding: 2px 5px;
+}
+
+.snap-dir--in  { color: #22c55e; background: rgba(34,197,94,0.15); }
+.snap-dir--out { color: #E7000B; background: rgba(231,0,11,0.15); }

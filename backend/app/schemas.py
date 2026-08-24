@@ -12,6 +12,7 @@ class PersonResponse(BaseModel):
     last_seen:          datetime | None
     last_camera:        str | None
     last_camera_name:   str | None = None
+    last_zone_name:     str | None = None
     best_thumbnail_url: str | None
     is_known:           bool
     enrollment_date:    date | None
@@ -46,14 +47,27 @@ class PeopleFeedItem(BaseModel):
     person_label:  str | None
     person_name:   str | None = None
     is_known:      bool = False
-    camera_id:     str
-    camera_name:   str | None
-    timestamp:     datetime
+    camera_id:       str
+    camera_name:     str | None
+    camera_location: str | None = None
+    timestamp:       datetime
     thumbnail_url: str | None
     tracklet_id:   int | None = None  # None = deteksi ini belum punya tracklet tertaut (appearance search tidak tersedia untuknya)
 
 
 class PeopleFeedResponse(BaseModel):
+    items: list[PeopleFeedItem]
+    total: int
+    page:  int
+    pages: int
+    limit: int
+
+
+# Sama persis strukturnya dengan PeopleFeedResponse — tapi `items` di sini
+# satu baris per PERSON (deteksi terakhirnya), bukan satu baris per deteksi.
+# Tipe terpisah supaya frontend eksplisit soal endpoint mana yang dipanggil,
+# walau isinya identik dengan PeopleFeedResponse.
+class PersonsFeedResponse(BaseModel):
     items: list[PeopleFeedItem]
     total: int
     page:  int
@@ -173,7 +187,7 @@ class ZoneForCameraResponse(BaseModel):
 
 
 class ZoneHistoryPoint(BaseModel):
-    date:      date
+    bucket:    str    # label siap-tampil: "14:00" (granularity=hour) atau "23/08" (granularity=day)
     count_in:  int
     count_out: int
 
@@ -191,6 +205,26 @@ class ZoneEventResponse(BaseModel):
     snapshot_url: str | None
     camera_id:    str | None
     camera_name:  str | None
+
+
+class PersonCrossingResponse(BaseModel):
+    id:           int
+    timestamp:    datetime
+    direction:    str
+    camera_id:    str | None
+    camera_name:  str | None
+    zone_name:    str | None
+    snapshot_url: str | None
+
+
+class ZoneOccupantResponse(BaseModel):
+    person_id:     int | None
+    person_label:  str | None   # None = tracklet belum resolve identitasnya saat crossing terjadi
+    person_name:   str | None
+    is_known:      bool = False
+    since:         datetime      # timestamp event IN terakhirnya
+    camera_name:   str | None
+    thumbnail_url: str | None
 
 
 # ── Occupancy ─────────────────────────────────────────────────────────────────

@@ -33,7 +33,7 @@ from app.services.geometry import cross_side, foot_point_xyxy, is_in_side
 BUFFER_FRAMES      = 10
 NEAR_LINE_DIST     = 40
 MIN_CROP_PX        = 32
-MIN_MARGIN         = 0.05   # gap minimum top1-top2 untuk confident match
+MIN_MARGIN         = 0.0   # gap minimum top1-top2 untuk confident match
 MAX_BANK_SIZE      = 5      # maks entry per identitas di bank embedding
 BANK_MERGE_SIM     = 0.90   # sim >= ini → update entry lama, bukan tambah baru
 BANK_STALE_HOURS   = 6.0    # entry yang tidak jadi top-match selama N jam → kandidat pruning
@@ -49,20 +49,12 @@ def _debug_reid() -> bool:
 
 
 # ── Tracklet association (Fase 2) ──────────────────────────────────────────────
-# Semua angka di bawah ini tebakan awal — wajib dituning terhadap predictions.csv
-# di mode file-playlist (T2.12). Bisa dioverride lewat StreamStartRequest.
-
-W_REID                 = 1
-W_TIME                 = 0
-W_CAM                  = 0
+# Skor asosiasi = cosine similarity murni (dulu ada juga suku waktu-antar-
+# kemunculan & transisi-antar-kamera, dihapus — w_reid dipakai 1.0, dua suku
+# lain 0, jadi gak pernah nyumbang skor apa pun; lihat git history kalau perlu
+# dihidupkan lagi).
 # ASSOC_THRESHOLD didefinisikan di app.schemas (satu sumber, dipakai juga sebagai
 # default reid_threshold di ProcessVideoRequest/StreamStartRequest).
-T_NEAR                 = 180.0    # detik — jeda ini dianggap masuk akal untuk pindah kamera
-                                   # (dinaikkan dari 60s: T2.12 — 60s bikin false split parah,
-                                   # tracklet orang sama yang sempat lolos dari frame > 60s
-                                   # kehilangan seluruh skor f_time, cos_sim sendirian gak
-                                   # cukup buat lolos threshold yang sudah dinaikkan)
-T_FAR                  = 1800.0   # detik — jeda ini dianggap tidak informatif lagi
 TRACKLET_GAP_CYCLES    = 15       # siklus batch berturut-turut track hilang → tutup tracklet
 TRACKLET_MAX_DURATION  = 600.0    # detik — tutup paksa + buka tracklet baru dengan key sama
 TRACKLET_MAX_SAMPLES   = 16       # maks embedding disimpan per tracklet (top-K by quality)
@@ -93,21 +85,6 @@ class Tracklet:
 
 def _overlaps(a: tuple[datetime, datetime], b: tuple[datetime, datetime]) -> bool:
     return a[0] < b[1] and b[0] < a[1]
-
-
-def _f_time(dt: float) -> float:
-    # dt negatif BUKAN berarti dua tracklet tumpang tindih (itu sudah dicegat
-    # _overlaps() lebih dulu) — bisa juga cuma tracklet yang lagi resolve
-    # kebetulan mulai lebih awal dari sighting terakhir kandidat, tapi selesai
-    # DIPROSES belakangan (urutan resolve beda kamera bisa meleset dari urutan
-    # kejadian aslinya, terutama mode file-playlist — lihat plan/08-pipeline-
-    # flow.md §9b). Pakai jarak absolut, bukan dianggap "tidak wajar".
-    dt = abs(dt)
-    if dt <= T_NEAR:
-        return 1.0
-    if dt >= T_FAR:
-        return 0.0
-    return 1.0 - (dt - T_NEAR) / (T_FAR - T_NEAR)
 
 
 def par_attrs(par, crop: "np.ndarray | None") -> "dict | None":
@@ -157,12 +134,8 @@ class IdentityDB:
     def __init__(
         self, reid_threshold: float, camera_id: str = "",
         par_extractor=None,
-        *, w_reid: float = W_REID, w_time: float = W_TIME, w_cam: float = W_CAM,
     ) -> None:
         self.threshold  = reid_threshold  # dipakai sebagai ASSOC_THRESHOLD
-        self.w_reid     = w_reid
-        self.w_time     = w_time
-        self.w_cam      = w_cam
         self._camera_id = camera_id
 
         # Bank: name → list of {"emb": np.ndarray, "last_match": datetime, "cam_id": str}
@@ -172,8 +145,6 @@ class IdentityDB:
         self._name_to_owner:   dict[str, tuple[str, int]]       = {}  # dipakai to_records()/identities saja
         self._active_tracks:   dict[str, set[int]]              = {}
         self._last_interval:   dict[str, tuple[datetime, datetime]] = {}
-        self._last_cam:        dict[str, str]                   = {}
-        self._camera_group:    dict[str, "str | int | None"]    = {}
         # Mode file-playlist (evaluasi/testing): beberapa kamera memutar klip
         # yang overlap waktu secara sengaja (simulasi), bukan indikasi orang
         # beneran ada di 2 tempat. Hard constraint interval-overlap di
@@ -283,22 +254,8 @@ class IdentityDB:
 
     # ── Asosiasi ─────────────────────────────────────────────────────────────
 
-    def _p_transition(self, cam_a: str, cam_b: str) -> float:
-        if cam_a == cam_b:
-            return 1.0
-        ga = self._camera_group.get(cam_a)
-        gb = self._camera_group.get(cam_b)
-        if ga is None or gb is None:
-            return 0.5
-        return 0.8 if ga == gb else 0.3
-
-    def set_camera_groups(self, group_by_camera: "dict[str, str | int | None]") -> None:
-        """Dipanggil sekali saat stream/start. Sumbernya cameras.group_id yang
-        sudah difetch StreamManager — tidak perlu HTTP call terpisah."""
-        self._camera_group = dict(group_by_camera)
-
     def associate(self, emb: np.ndarray, tl: Tracklet) -> tuple["str | None", float]:
-        """score = w_reid*cos + w_time*f_time(dt) + w_cam*P_transition(cam_prev,cam_now).
+        """score = cosine similarity murni terhadap bank embedding tiap orang.
         Constraint keras: dua tracklet yang interval waktunya beririsan tidak
         pernah dianggap orang yang sama (menggantikan collision guard lama) —
         kecuali `skip_interval_guard` true (mode file-playlist, lihat
@@ -310,17 +267,9 @@ class IdentityDB:
             other = self._last_interval.get(name)
             if other is not None and _overlaps(interval, other) and not self.skip_interval_guard:
                 continue
-            cos      = max(float(np.dot(emb, e["emb"])) for e in bank)
-            last_cam = self._last_cam.get(name, tl.cam_id)
-            other_end = other[1] if other is not None else tl.started_at
-            dt = (tl.started_at - other_end).total_seconds()
-            ft = _f_time(dt)
-            pc = self._p_transition(last_cam, tl.cam_id)
-            score = self.w_reid * cos + self.w_time * ft + self.w_cam * pc
+            score = max(float(np.dot(emb, e["emb"])) for e in bank)
             if _debug_reid():
-                print(f"[assoc.cmp] {tl.cam_id}/t{tl.track_id} vs {name!r}: "
-                      f"cos={cos:.3f} dt={dt:.0f}s f_time={ft:.3f} "
-                      f"cam={last_cam}->{tl.cam_id} p_cam={pc:.2f} score={score:.3f}")
+                print(f"[assoc.cmp] {tl.cam_id}/t{tl.track_id} vs {name!r}: cos={score:.3f}")
             if score > best_score:
                 second_score = best_score
                 best_score, best_name = score, name
@@ -353,7 +302,6 @@ class IdentityDB:
         self._track_to_name[key]  = name
         self._name_to_owner[name] = key
         self._last_interval[name] = (tl.started_at, tl.last_seen)
-        self._last_cam[name]      = tl.cam_id
 
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         # score >= threshold tapi tetap NEW berarti ditolak gate margin (MIN_MARGIN),
@@ -438,7 +386,6 @@ class IdentityDB:
             prev = self._last_interval.get(display)
             if prev is None or ended_at > prev[1]:
                 self._last_interval[display] = (e["started_at"], ended_at)
-                self._last_cam[display]      = e["camera_id"]
 
         self._count = max(self._count, max_count)
 
@@ -480,7 +427,6 @@ class IdentityDB:
         self._name_to_owner.clear()
         self._active_tracks.clear()
         self._last_interval.clear()
-        self._last_cam.clear()
         self._count = 0
 
     def to_records(self) -> list[IdentityRecord]:

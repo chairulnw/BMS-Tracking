@@ -8,6 +8,7 @@ import {
 } from '@angular/core';
 import { NgClass, SlicePipe } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
+import { ActivatedRoute } from '@angular/router';
 import { forkJoin } from 'rxjs';
 import { AuthUrlPipe } from '../../pipes/auth-url.pipe';
 import { environment } from '../../../environments/environment';
@@ -60,7 +61,17 @@ interface OccupancyRow {
   current_occupancy:  number;
 }
 
-interface HistoryPoint { date: string; count_in: number; count_out: number; }
+interface HistoryPoint { bucket: string; count_in: number; count_out: number; }
+
+interface ZoneOccupant {
+  person_id:     number | null;
+  person_label:  string | null;
+  person_name:   string | null;
+  is_known:      boolean;
+  since:         string;
+  camera_name:   string | null;
+  thumbnail_url: string | null;
+}
 
 interface ZoneEvent {
   id:           number;
@@ -72,7 +83,7 @@ interface ZoneEvent {
   camera_name:  string | null;
 }
 
-type RangeMode = 'today' | '7days' | 'custom';
+type RangeMode = 'today' | '7days';
 
 @Component({
   selector: 'app-zone',
@@ -102,7 +113,7 @@ export class ZonePage implements OnInit {
   createCapacity: number | null = null;
   isCreatingNewZone = false;   // true = drawingCamera lagi dipakai buat bikin zona baru, bukan edit yang lama
 
-  constructor(private http: HttpClient) {}
+  constructor(private http: HttpClient, private route: ActivatedRoute) {}
 
   ngOnInit(): void {
     this.loadAll();
@@ -117,6 +128,10 @@ export class ZonePage implements OnInit {
       this.zones     = zones;
       this.cameras   = cameras;
       this.occupancy = occupancy;
+
+      const zoneId = Number(this.route.snapshot.queryParamMap.get('zone_id'));
+      const target = zones.find(z => z.id === zoneId);
+      if (target) this.openViewModal(target);
     });
   }
 
@@ -190,12 +205,14 @@ export class ZonePage implements OnInit {
   viewZone: ZoneDetail | null = null;
 
   rangeMode: RangeMode = 'today';
-  customFrom = '';
-  customTo   = '';
 
   historyPoints: HistoryPoint[] = [];
 
   viewCamSnapshotUrls: Record<string, string> = {};   // camera_str_id -> URL, diambil sekali pas modal dibuka
+
+  occupants: ZoneOccupant[] = [];
+  occupantsPage = 1;
+  readonly occupantsPerPage = 5;
 
   events: ZoneEvent[] = [];
   eventsPage  = 1;
@@ -204,26 +221,24 @@ export class ZonePage implements OnInit {
 
   playingClip: ZoneEvent | null = null;
   playingClipUrl = '';
+  clipError = false;
 
   private _todayISO(): string {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }
 
-  private _rangeDates(): { from: string; to: string } {
+  private _rangeDates(): { from: string; to: string; granularity: 'day' | 'hour' } {
     const to = this._todayISO();
-    if (this.rangeMode === 'today') return { from: to, to };
-    if (this.rangeMode === '7days') {
-      const d = new Date();
-      d.setDate(d.getDate() - 6);
-      const from = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      return { from, to };
-    }
-    return { from: this.customFrom || to, to: this.customTo || to };
+    if (this.rangeMode === 'today') return { from: to, to, granularity: 'hour' };
+    const d = new Date();
+    d.setDate(d.getDate() - 6);
+    const from = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return { from, to, granularity: 'day' };
   }
 
-  openViewModal(zone: Zone, event: Event): void {
-    event.stopPropagation();
+  openViewModal(zone: Zone, event?: Event): void {
+    event?.stopPropagation();
     this.http.get<ZoneDetail>(`${API}/zones/${zone.id}`).subscribe(detail => {
       this.viewZone   = detail;
       this.showViewModal = true;
@@ -238,7 +253,32 @@ export class ZonePage implements OnInit {
         }
       }
       this._reloadViewData();
+      this._loadOccupants();
     });
+  }
+
+  private _loadOccupants(): void {
+    if (!this.viewZone) return;
+    this.occupantsPage = 1;
+    this.http.get<ZoneOccupant[]>(`${API}/zones/${this.viewZone.id}/occupants`)
+      .subscribe(occupants => { this.occupants = occupants; });
+  }
+
+  get visibleOccupants(): ZoneOccupant[] {
+    const start = (this.occupantsPage - 1) * this.occupantsPerPage;
+    return this.occupants.slice(start, start + this.occupantsPerPage);
+  }
+
+  get occupantsPages(): number {
+    return Math.max(1, Math.ceil(this.occupants.length / this.occupantsPerPage));
+  }
+
+  nextOccupantsPage(): void {
+    if (this.occupantsPage < this.occupantsPages) this.occupantsPage++;
+  }
+
+  prevOccupantsPage(): void {
+    if (this.occupantsPage > 1) this.occupantsPage--;
   }
 
   closeViewModal(): void {
@@ -252,21 +292,12 @@ export class ZonePage implements OnInit {
     this._reloadViewData();
   }
 
-  onCustomFromChange(event: Event): void {
-    this.customFrom = (event.target as HTMLInputElement).value;
-    if (this.rangeMode === 'custom') this._reloadViewData();
-  }
-
-  onCustomToChange(event: Event): void {
-    this.customTo = (event.target as HTMLInputElement).value;
-    if (this.rangeMode === 'custom') this._reloadViewData();
-  }
-
   private _reloadViewData(): void {
     if (!this.viewZone) return;
-    const { from, to } = this._rangeDates();
-    this.http.get<HistoryPoint[]>(`${API}/zones/${this.viewZone.id}/history?from=${from}&to=${to}`)
-      .subscribe(points => { this.historyPoints = points; });
+    const { from, to, granularity } = this._rangeDates();
+    this.http.get<HistoryPoint[]>(
+      `${API}/zones/${this.viewZone.id}/history?from=${from}&to=${to}&granularity=${granularity}`
+    ).subscribe(points => { this.historyPoints = points; });
     this._loadEvents();
   }
 
@@ -289,8 +320,13 @@ export class ZonePage implements OnInit {
 
   playClip(ev: ZoneEvent): void {
     if (!ev.camera_id) return;
+    this.clipError       = false;
     this.playingClip    = ev;
     this.playingClipUrl = `${AI}/clips/${ev.camera_id}?timestamp=${encodeURIComponent(ev.timestamp)}`;
+  }
+
+  onClipError(): void {
+    this.clipError = true;
   }
 
   closeClipPlayer(): void {
@@ -303,6 +339,18 @@ export class ZonePage implements OnInit {
 
   get historyMax(): number {
     return Math.max(1, ...this.historyPoints.map(p => Math.max(p.count_in, p.count_out)));
+  }
+
+  /** Terlalu banyak label (24 jam) bikin numpuk gak kebaca — tampilkan tiap-N saja. */
+  get historyLabelStep(): number {
+    return this.rangeMode === 'today' ? 3 : 1;
+  }
+
+  fmtDateTime(iso: string): string {
+    return new Date(iso).toLocaleString('id-ID', {
+      day: '2-digit', month: '2-digit', year: 'numeric',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    });
   }
 
   onViewSnapshotLoad(index: number): void {

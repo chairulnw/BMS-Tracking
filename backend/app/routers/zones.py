@@ -12,6 +12,7 @@ from app.schemas import (
     ZoneHeatmapResponse,
     ZoneHistoryPoint,
     ZoneIn,
+    ZoneOccupantResponse,
     ZoneResponse,
     ZoneUpdate,
 )
@@ -224,31 +225,111 @@ async def get_occupancy(
     ]
 
 
+@router.get("/zones/{zone_id}/occupants", response_model=list[ZoneOccupantResponse])
+async def zone_occupants(zone_id: int, request: Request) -> list[ZoneOccupantResponse]:
+    """Siapa saja yang SEDANG ada di zona ini sekarang. Dikelompokkan per
+    `person_label` kalau ada — tapi crossing yang terjadi SEBELUM tracklet-nya
+    resolve dapat `person_label = NULL` (lihat `08-pipeline-flow.md` §9), jadi
+    fallback ke `(zone_camera_id, track_id)` supaya orang yang belum
+    teridentifikasi tetap muncul di daftar (bukan cuma hilang, biar cocok
+    dengan hitungan agregat `/occupancy` yang tidak peduli identitas).
+    Per grup, ambil occupancy_event terakhirnya hari ini — kalau arah
+    terakhirnya IN (belum ada OUT sesudahnya), dianggap masih di dalam."""
+    pool = request.app.state.pool
+    from zoneinfo import ZoneInfo
+    today = datetime.now(ZoneInfo("Asia/Jakarta")).date()
+
+    rows = await pool.fetch(
+        """
+        WITH tagged AS (
+            SELECT oe.*, COALESCE(
+                oe.person_label,
+                'track:' || oe.zone_camera_id::text || ':' || COALESCE(oe.track_id::text, oe.id::text)
+            ) AS occupant_key
+            FROM occupancy_events oe
+            JOIN zone_cameras zc ON zc.id = oe.zone_camera_id
+            WHERE zc.zone_id = $1
+              AND (oe.timestamp AT TIME ZONE 'Asia/Jakarta')::date = $2
+        ),
+        latest AS (
+            SELECT DISTINCT ON (occupant_key)
+                occupant_key, person_label, direction, timestamp, zone_camera_id
+            FROM tagged
+            ORDER BY occupant_key, timestamp DESC
+        )
+        SELECT
+            p.id            AS person_id,
+            l.person_label  AS person_label,
+            p.name          AS person_name,
+            COALESCE(p.is_known, false) AS is_known,
+            l.timestamp     AS since,
+            c.name          AS camera_name,
+            p.best_thumbnail_url AS thumbnail_url
+        FROM latest l
+        LEFT JOIN persons p       ON p.label = l.person_label
+        LEFT JOIN zone_cameras zc ON zc.id = l.zone_camera_id
+        LEFT JOIN cameras c       ON c.id = zc.camera_id
+        WHERE l.direction = 'IN'
+        ORDER BY l.timestamp DESC
+        """,
+        zone_id, today,
+    )
+    return [dict(r) for r in rows]
+
+
 # ── History / heatmap / event log ────────────────────────────────────────────
 
 @router.get("/zones/{zone_id}/history", response_model=list[ZoneHistoryPoint])
 async def zone_history(
     zone_id: int,
     request: Request,
-    date_from: date = Query(..., alias="from"),
-    date_to:   date = Query(..., alias="to"),
+    date_from:   date = Query(..., alias="from"),
+    date_to:     date = Query(..., alias="to"),
+    granularity: str  = Query("day", pattern="^(day|hour)$"),
 ) -> list[ZoneHistoryPoint]:
-    rows = await request.app.state.pool.fetch(
+    """`hour`: satu hari (`from`), 24 titik jam-ke-jam. `day`: rentang tanggal,
+    satu titik per hari. Pakai generate_series biar hari/jam tanpa kejadian
+    tetap muncul sebagai 0 — bukan bolong di grafik."""
+    pool = request.app.state.pool
+    if granularity == "hour":
+        rows = await pool.fetch(
+            """
+            SELECT gs AS hour,
+                   COALESCE(SUM(CASE WHEN oe.direction = 'IN'  THEN 1 ELSE 0 END), 0)::int AS count_in,
+                   COALESCE(SUM(CASE WHEN oe.direction = 'OUT' THEN 1 ELSE 0 END), 0)::int AS count_out
+            FROM generate_series(0, 23) gs
+            LEFT JOIN occupancy_events oe
+                   ON oe.zone_camera_id IN (SELECT id FROM zone_cameras WHERE zone_id = $1)
+                  AND EXTRACT(HOUR FROM oe.timestamp AT TIME ZONE 'Asia/Jakarta') = gs
+                  AND (oe.timestamp AT TIME ZONE 'Asia/Jakarta')::date = $2
+            GROUP BY gs
+            ORDER BY gs
+            """,
+            zone_id, date_from,
+        )
+        return [
+            {"bucket": f"{r['hour']:02d}:00", "count_in": r["count_in"], "count_out": r["count_out"]}
+            for r in rows
+        ]
+
+    rows = await pool.fetch(
         """
-        SELECT
-            (oe.timestamp AT TIME ZONE 'Asia/Jakarta')::date AS date,
-            COALESCE(SUM(CASE WHEN oe.direction = 'IN'  THEN 1 ELSE 0 END), 0)::int AS count_in,
-            COALESCE(SUM(CASE WHEN oe.direction = 'OUT' THEN 1 ELSE 0 END), 0)::int AS count_out
-        FROM occupancy_events oe
-        JOIN zone_cameras zc ON zc.id = oe.zone_camera_id
-        WHERE zc.zone_id = $1
-          AND (oe.timestamp AT TIME ZONE 'Asia/Jakarta')::date BETWEEN $2 AND $3
-        GROUP BY (oe.timestamp AT TIME ZONE 'Asia/Jakarta')::date
-        ORDER BY date
+        SELECT gs::date AS d,
+               COALESCE(SUM(CASE WHEN oe.direction = 'IN'  THEN 1 ELSE 0 END), 0)::int AS count_in,
+               COALESCE(SUM(CASE WHEN oe.direction = 'OUT' THEN 1 ELSE 0 END), 0)::int AS count_out
+        FROM generate_series($2::date, $3::date, interval '1 day') gs
+        LEFT JOIN occupancy_events oe
+               ON oe.zone_camera_id IN (SELECT id FROM zone_cameras WHERE zone_id = $1)
+              AND (oe.timestamp AT TIME ZONE 'Asia/Jakarta')::date = gs::date
+        GROUP BY gs::date
+        ORDER BY gs::date
         """,
         zone_id, date_from, date_to,
     )
-    return [dict(r) for r in rows]
+    return [
+        {"bucket": r["d"].strftime("%d/%m"), "count_in": r["count_in"], "count_out": r["count_out"]}
+        for r in rows
+    ]
 
 
 @router.get("/zones/{zone_id}/heatmap", response_model=ZoneHeatmapResponse)

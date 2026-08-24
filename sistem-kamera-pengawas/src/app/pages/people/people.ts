@@ -18,11 +18,12 @@ interface FeedItem {
   person_label:  string | null;
   person_name:   string | null;
   is_known:      boolean;
-  camera_id:     string;
-  camera_name:   string | null;
-  timestamp:     string;
-  thumbnail_url: string | null;
-  tracklet_id:   number | null;
+  camera_id:       string;
+  camera_name:     string | null;
+  camera_location: string | null;
+  timestamp:       string;
+  thumbnail_url:   string | null;
+  tracklet_id:     number | null;
 }
 
 interface FeedResponse {
@@ -33,26 +34,27 @@ interface FeedResponse {
   limit: number;
 }
 
-// ── Card ORANG — satu per person_id, dikelompokkan dari halaman DETEKSI saat
-// ini di frontend. Otomatis ada begitu person_id punya deteksi apa pun, gak
-// perlu dinamain dulu. "Beri Nama" ada di sini, bukan di card Deteksi.
+// ── Card ORANG — dari GET /people/persons (level orang, paginasi sendiri,
+// independen dari section DETEKSI). "Beri Nama" ada di sini, bukan di card
+// Deteksi.
 interface PersonCard {
   person_id:     number;
   person_name:   string | null;
   person_label:  string | null;
-  is_known:      boolean;
-  thumbnail_url: string | null;
-  camera_name:   string | null;
-  camera_id:     string;
-  timestamp:     string;
-  tracklet_id:   number | null;
-  count:         number;
+  is_known:        boolean;
+  thumbnail_url:   string | null;
+  camera_name:     string | null;
+  camera_location: string | null;
+  camera_id:       string;
+  timestamp:       string;
+  tracklet_id:     number | null;
 }
 
 interface Camera {
   id:         number;
   camera_id:  string | null;
   name:       string;
+  location:   string | null;
   group_name: string | null;
 }
 
@@ -132,33 +134,15 @@ export class People implements OnInit {
   total = 0;
   page  = 1;
   pages = 1;
-  private readonly limit = 24;
 
-  // ── Section ORANG — dikelompokkan dari halaman DETEKSI saat ini ────────────
-  get orang(): PersonCard[] {
-    const byPerson = new Map<number, PersonCard>();
-    for (const item of this.deteksi) {
-      if (item.person_id == null) continue;
-      const existing = byPerson.get(item.person_id);
-      if (existing) {
-        existing.count++;
-      } else {
-        byPerson.set(item.person_id, {
-          person_id:     item.person_id,
-          person_name:   item.person_name,
-          person_label:  item.person_label,
-          is_known:      item.is_known,
-          thumbnail_url: item.thumbnail_url,
-          camera_name:   item.camera_name,
-          camera_id:     item.camera_id,
-          timestamp:     item.timestamp,
-          tracklet_id:   item.tracklet_id,
-          count:         1,
-        });
-      }
-    }
-    return Array.from(byPerson.values());
-  }
+  // ── Section ORANG — GET /people/persons, paginasi SENDIRI (independen dari
+  // DETEKSI) — filter yang dipakai sama, tapi halaman/total dihitung per orang.
+  orang:      PersonCard[] = [];
+  orangTotal = 0;
+  orangPage  = 1;
+  orangPages = 1;
+
+  private readonly limit = 6;   // satu halaman = satu baris kartu (lihat .orang-grid/.deteksi-grid, 6 kolom)
 
   // ── "Beri nama" inline form — di card ORANG, bukan per-deteksi ─────────────
   namingPersonId: number | null = null;
@@ -173,6 +157,9 @@ export class People implements OnInit {
 
     const qp = this.route.snapshot.queryParamMap.get('similar_to');
     if (qp) this.similarTo = Number(qp);
+
+    const q = this.route.snapshot.queryParamMap.get('q');
+    if (q) this.searchQuery = q;
 
     this.search$.pipe(
       debounceTime(300),
@@ -204,6 +191,10 @@ export class People implements OnInit {
   onSearchInput(event: Event): void {
     this.searchQuery = (event.target as HTMLInputElement).value;
     this.search$.next();
+  }
+
+  onSearchKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Enter') this._reload();
   }
 
   onDateChange(event: Event): void {
@@ -283,15 +274,19 @@ export class People implements OnInit {
   }
 
   // ── Muat data ─────────────────────────────────────────────────────────────
+  // DETEKSI (/people/feed) dan ORANG (/people/persons) pakai filter yang
+  // sama tapi paginasi independen — masing-masing punya page/pages sendiri.
 
   private _reload(): void {
     this.page = 1;
+    this.orangPage = 1;
     this._loadFeed();
+    this._loadPersons();
   }
 
-  private _loadFeed(): void {
+  private _filterParams(page: number): URLSearchParams {
     const params = new URLSearchParams({
-      page:  String(this.page),
+      page:  String(page),
       limit: String(this.limit),
       from:  this.selectedDate,
       to:    this.selectedDate,
@@ -305,7 +300,11 @@ export class People implements OnInit {
     for (const acc of this.accessories) {
       if (this.selectedAccessories.includes(acc.id)) params.append('attrs', acc.attrNames.join(','));
     }
+    return params;
+  }
 
+  private _loadFeed(): void {
+    const params = this._filterParams(this.page);
     this.http.get<FeedResponse>(`${API}/people/feed?${params}`).subscribe({
       next: res => {
         this.deteksi = res.items;
@@ -316,14 +315,49 @@ export class People implements OnInit {
     });
   }
 
+  private _loadPersons(): void {
+    const params = this._filterParams(this.orangPage);
+    this.http.get<FeedResponse>(`${API}/people/persons?${params}`).subscribe({
+      next: res => {
+        this.orang      = res.items.filter((i): i is FeedItem & { person_id: number } => i.person_id != null);
+        this.orangTotal = res.total;
+        this.orangPages = res.pages;
+      },
+      error: err => console.error('[people] persons error:', err),
+    });
+  }
+
   goToPage(p: number): void {
     if (p < 1 || p > this.pages) return;
     this.page = p;
     this._loadFeed();
   }
 
-  get pageNumbers(): number[] {
-    return Array.from({ length: this.pages }, (_, i) => i + 1);
+  goToOrangPage(p: number): void {
+    if (p < 1 || p > this.orangPages) return;
+    this.orangPage = p;
+    this._loadPersons();
+  }
+
+  // Windowed: selalu tampilkan halaman 1 & terakhir, plus tetangga dekat
+  // halaman aktif — jangan render semua nomor kalau total halaman besar.
+  private _windowedPages(cur: number, total: number): (number | '...')[] {
+    if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+
+    const nums: (number | '...')[] = [1];
+    if (cur > 3) nums.push('...');
+    for (let p = Math.max(2, cur - 1); p <= Math.min(total - 1, cur + 1); p++) nums.push(p);
+    if (cur < total - 2) nums.push('...');
+    nums.push(total);
+    return nums;
+  }
+
+  get pageNumbers(): (number | '...')[] {
+    return this._windowedPages(this.page, this.pages);
+  }
+
+  get orangPageNumbers(): (number | '...')[] {
+    return this._windowedPages(this.orangPage, this.orangPages);
   }
 
   // ── Navigasi ke Person Investigation ─────────────────────────────────────────
@@ -372,6 +406,7 @@ export class People implements OnInit {
       next: () => {
         this.namingPersonId = null;
         this._loadFeed();
+        this._loadPersons();
       },
       error: err => { console.error('[people] beri nama error:', err); this.cancelNaming(); },
     });
@@ -381,6 +416,10 @@ export class People implements OnInit {
 
   cameraName(camera_id: string): string {
     return this.cameras.find(c => c.camera_id === camera_id)?.name ?? camera_id;
+  }
+
+  cameraLocation(camera_id: string): string {
+    return this.cameras.find(c => c.camera_id === camera_id)?.location || this.cameraName(camera_id);
   }
 
   personBadge(card: PersonCard): string {

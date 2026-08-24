@@ -1,5 +1,7 @@
+import builtins
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 
 import torch
@@ -10,6 +12,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from ultralytics import YOLO
 
 load_dotenv()   # baca .env sebelum apapun
+
+# ponytail: monkeypatch print() sekali di titik masuk biar semua log terminal
+# (main.py + stream_service/*) kepakai timestamp, tanpa ubah puluhan call
+# site satu-satu. Kalau nanti butuh level/filter, ganti ke logging module.
+_print = builtins.print
+def _print_with_ts(*args, **kwargs):
+    _print(f"[{datetime.now().strftime('%H:%M:%S')}]", *args, **kwargs)
+builtins.print = _print_with_ts
 
 import threading
 

@@ -263,19 +263,14 @@
 
 /* ── Grid (jiplak .zone-grid / .zone-card) ───────────────────────────────── */
 
-.orang-grid {
+.orang-grid, .deteksi-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 16px;
-}
-
-.deteksi-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  grid-template-columns: repeat(6, 1fr);   /* 1 halaman = 1 baris = 6 kartu, tidak pernah overflow */
   gap: 16px;
 }
 
 .person-card, .detection-card {
+  min-width: 0;   /* biar kartu bisa menyusut ikut kolom grid, bukan dorong overflow */
   background: #141D2B;
   border: 1px solid rgba(255,255,255,0.08);
   border-radius: 10px;
@@ -500,3 +495,13 @@
 }
 
 .pg-btn--active:hover { background: #E7000B; }
+
+.pg-ellipsis {
+  min-width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #6A7282;
+  font-size: 13px;
+}
