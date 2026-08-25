@@ -16,6 +16,7 @@ import numpy as np
 import torch
 import torchreid
 from ultralytics import YOLO
+from ultralytics.trackers.bot_sort import BOTSORT
 from ultralytics.trackers.byte_tracker import BYTETracker
 from ultralytics.utils import IterableSimpleNamespace, YAML
 from ultralytics.utils.checks import check_yaml
@@ -29,6 +30,13 @@ CROSSING_COOLDOWN = 3.0   # detik minimum antar event crossing per (garis/polygo
 THUMBNAILS_DIR    = Path("thumbnails")
 PREDICTIONS_CSV   = Path("predictions.csv")  # log prediksi mode file-playback, utk dibanding ground truth
 
+# ponytail: cuma bytetrack/botsort (dua-duanya bawaan ultralytics.trackers,
+# args-nya kompatibel). OC-SORT bukan bawaan Ultralytics — perlu dependency
+# baru kalau mau ditambah, belum diwire di sini.
+TRACKER_TYPE = os.getenv("TRACKER_TYPE", "bytetrack")   # bytetrack | botsort
+_TRACKER_REGISTRY = {"bytetrack": (BYTETracker, "bytetrack.yaml"),
+                     "botsort":   (BOTSORT,     "botsort.yaml")}
+
 
 @dataclass
 class _ModelBundle:
@@ -38,6 +46,7 @@ class _ModelBundle:
     detector:     YOLO
     extractor:    "torchreid.utils.FeatureExtractor"
     tracker_args: IterableSimpleNamespace
+    tracker_cls:  type
     par:          None = None
 
 
@@ -69,7 +78,9 @@ def load_model_bundle(yolo_model: str, reid_model: str) -> _ModelBundle:
         model_path=str(_msmt17) if _msmt17.exists() else "",
         device=reid_device,
     )
-    tracker_cfg = YAML.load(check_yaml("bytetrack.yaml"))
+    tracker_cls, tracker_yaml = _TRACKER_REGISTRY[TRACKER_TYPE]
+    print(f"[batch] tracker: {TRACKER_TYPE}")
+    tracker_cfg = YAML.load(check_yaml(tracker_yaml))
     tracker_args = IterableSimpleNamespace(**tracker_cfg)
 
     # PAR (atribut penampilan, Fase 3) — dijalankan sekali per tracklet pada
@@ -87,7 +98,8 @@ def load_model_bundle(yolo_model: str, reid_model: str) -> _ModelBundle:
         print(f"[batch] {rap1_checkpoint} tidak ditemukan — lanjut tanpa PAR")
 
     print("[batch] models ready")
-    return _ModelBundle(detector=detector, extractor=extractor, tracker_args=tracker_args, par=par)
+    return _ModelBundle(detector=detector, extractor=extractor, tracker_args=tracker_args,
+                         tracker_cls=tracker_cls, par=par)
 
 
 class BatchProcessor:
@@ -128,6 +140,7 @@ class BatchProcessor:
         self._detector      = models.detector
         self._extractor     = models.extractor
         self._tracker_args  = models.tracker_args
+        self._tracker_cls   = models.tracker_cls
         self._par           = models.par
 
     def start(self) -> None:
@@ -145,7 +158,7 @@ class BatchProcessor:
             if slot.connect():
                 print(f"[{slot.camera_id}] opened {slot.width}x{slot.height} @ {slot.fps:.1f}fps")
                 slot.zones   = _fetch_zones(slot.camera_id)
-                slot.tracker = BYTETracker(args=self._tracker_args)
+                slot.tracker = self._tracker_cls(args=self._tracker_args)
                 n_line = sum(1 for z in slot.zones if z["type"] == "line")
                 n_poly = sum(1 for z in slot.zones if z["type"] == "polygon")
                 print(f"[{slot.camera_id}] {n_line} line-zone(s), {n_poly} polygon-zone(s) loaded")
@@ -181,7 +194,7 @@ class BatchProcessor:
                         slot._last_dir.clear()
                         slot._crossing_ts.clear()
                         slot._polygon_inside.clear()
-                        slot.tracker = BYTETracker(args=self._tracker_args)
+                        slot.tracker = self._tracker_cls(args=self._tracker_args)
                     print(f"[batch] midnight reset — identity DB dikosongkan untuk {today}")
                 now           = time.time()
                 batch_frames: list[np.ndarray] = []
