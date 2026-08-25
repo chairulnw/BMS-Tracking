@@ -33,7 +33,7 @@ from app.services.geometry import cross_side, foot_point_xyxy, is_in_side
 BUFFER_FRAMES      = 10
 NEAR_LINE_DIST     = 40
 MIN_CROP_PX        = 32
-MIN_MARGIN         = 0.0   # gap minimum top1-top2 untuk confident match
+MIN_MARGIN         = 0.05   # gap minimum top1-top2 untuk confident match
 MAX_BANK_SIZE      = 5      # maks entry per identitas di bank embedding
 BANK_MERGE_SIM     = 0.90   # sim >= ini → update entry lama, bukan tambah baru
 BANK_STALE_HOURS   = 6.0    # entry yang tidak jadi top-match selama N jam → kandidat pruning
