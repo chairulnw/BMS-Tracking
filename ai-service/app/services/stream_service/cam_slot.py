@@ -61,9 +61,11 @@ class _CamSlot:
         reid_threshold:     float,
         stop_event:         threading.Event,
         analytics_enabled:  bool = True,
+        skip_recording:     bool = False,   # True untuk evaluasi terisolasi — tidak tulis klip/thumbnail
     ) -> None:
         self.camera_id          = camera_id
         self.analytics_enabled  = analytics_enabled
+        self.skip_recording     = skip_recording
         self._rtsp_url   = rtsp_url
         # Playlist: comma-separated file paths → sequential playback
         parts = [p.strip() for p in rtsp_url.split(",")]
@@ -135,14 +137,15 @@ class _CamSlot:
             self.fps    = cap.get(cv2.CAP_PROP_FPS) or 15.0
             self.width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        if self.recorder is None:
-            self.recorder = ClipRecorder(self.camera_id, self.fps, self.width, self.height)
-        self._rec_thread = threading.Thread(
-            target=self._recorder_loop,
-            args=(self.rec_q, self._cap_stop),
-            daemon=True, name=f"rec-{self.camera_id}",
-        )
-        self._rec_thread.start()
+        if not self.skip_recording:
+            if self.recorder is None:
+                self.recorder = ClipRecorder(self.camera_id, self.fps, self.width, self.height)
+            self._rec_thread = threading.Thread(
+                target=self._recorder_loop,
+                args=(self.rec_q, self._cap_stop),
+                daemon=True, name=f"rec-{self.camera_id}",
+            )
+            self._rec_thread.start()
         self._launch_capture()
         with self._lock:
             self._state["running"] = True
@@ -193,13 +196,14 @@ class _CamSlot:
                 self.frame_q.get_nowait()
             except queue.Empty:
                 break
+        rec_q = None if self.skip_recording else self.rec_q
         if self._playlist:
             ev_playlist = self._playlist_events or [(p, None, None) for p in self._playlist]
             target = _CamSlot._capture_loop_files
-            args   = (ev_playlist, self.frame_q, self._cap_stop, self.rec_q)
+            args   = (ev_playlist, self.frame_q, self._cap_stop, rec_q)
         else:
             target = _CamSlot._capture_loop
-            args   = (self._cap, self.frame_q, self._cap_stop, self.rec_q)
+            args   = (self._cap, self.frame_q, self._cap_stop, rec_q)
         self._cap_thread = threading.Thread(
             target=target, args=args, daemon=True, name=f"cap-{self.camera_id}"
         )

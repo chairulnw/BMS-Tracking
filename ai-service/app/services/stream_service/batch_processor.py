@@ -15,7 +15,8 @@ import cv2
 import numpy as np
 import torch
 import torchreid
-from ultralytics import YOLO
+from ocsort.ocsort import OCSort
+from ultralytics import RTDETR, YOLO
 from ultralytics.trackers.bot_sort import BOTSORT
 from ultralytics.trackers.byte_tracker import BYTETracker
 from ultralytics.utils import IterableSimpleNamespace, YAML
@@ -30,12 +31,37 @@ CROSSING_COOLDOWN = 3.0   # detik minimum antar event crossing per (garis/polygo
 THUMBNAILS_DIR    = Path("thumbnails")
 PREDICTIONS_CSV   = Path("predictions.csv")  # log prediksi mode file-playback, utk dibanding ground truth
 
-# ponytail: cuma bytetrack/botsort (dua-duanya bawaan ultralytics.trackers,
-# args-nya kompatibel). OC-SORT bukan bawaan Ultralytics — perlu dependency
-# baru kalau mau ditambah, belum diwire di sini.
-TRACKER_TYPE = os.getenv("TRACKER_TYPE", "bytetrack")   # bytetrack | botsort
-_TRACKER_REGISTRY = {"bytetrack": (BYTETracker, "bytetrack.yaml"),
-                     "botsort":   (BOTSORT,     "botsort.yaml")}
+
+class _OCSortAdapter:
+    """Bungkus OCSort (paket `ocsort`, interface array polos) biar bisa dipanggil
+    persis sama seperti BYTETracker/BOTSORT: .update(det, frame), dengan det
+    berupa objek Boxes ultralytics (.xyxy/.conf/.cls), balikin baris
+    [x1,y1,x2,y2,track_id,conf] (indeks 0-5 dipakai kode pemanggil)."""
+
+    def __init__(self, args=None) -> None:
+        self._oc = OCSort()
+
+    def update(self, det, frame=None) -> np.ndarray:
+        if det is None or len(det) == 0:
+            return np.empty((0, 6))
+        dets = np.concatenate(
+            [det.xyxy, det.conf.reshape(-1, 1), det.cls.reshape(-1, 1)], axis=1
+        )
+        # paket `ocsort` ini panggil .numpy() di dalam update() sendiri,
+        # jadi butuh torch.Tensor sebagai input, bukan ndarray polos.
+        tracks = self._oc.update(torch.as_tensor(dets), None)  # -> [x1,y1,x2,y2,id,cls,conf]
+        if len(tracks) == 0:
+            return np.empty((0, 6))
+        return tracks[:, [0, 1, 2, 3, 4, 6]]   # -> [x1,y1,x2,y2,id,conf]
+
+
+# ponytail: bytetrack/botsort masih lewat args+yaml bawaan Ultralytics;
+# ocsort dibungkus _OCSortAdapter jadi interface-nya sama (tuple kedua None
+# = tidak ada yaml config buat OC-SORT).
+TRACKER_TYPE = os.getenv("TRACKER_TYPE", "bytetrack")   # bytetrack | botsort | ocsort
+_TRACKER_REGISTRY = {"bytetrack": (BYTETracker,      "bytetrack.yaml"),
+                     "botsort":   (BOTSORT,          "botsort.yaml"),
+                     "ocsort":    (_OCSortAdapter,   None)}
 
 
 @dataclass
@@ -69,19 +95,32 @@ def load_model_bundle(yolo_model: str, reid_model: str) -> _ModelBundle:
     else:
         reid_device = "cpu"
 
-    print(f"[batch] loading YOLO({yolo_model}) → {yolo_device}, ReID({reid_model}) → {reid_device}")
-    detector = YOLO(yolo_model)
+    # RTDETR pakai kelas ultralytics beda dari YOLO — dipilih dari nama file
+    # weight-nya (mis. "rtdetr-l.pt"), biar YOLO_MODEL tetap satu env var saja.
+    detector_cls = RTDETR if "rtdetr" in yolo_model.lower() else YOLO
+    print(f"[batch] loading {detector_cls.__name__}({yolo_model}) → {yolo_device}, "
+          f"ReID({reid_model}) → {reid_device}")
+    detector = detector_cls(yolo_model)
     detector.to(yolo_device)
-    _msmt17 = Path.home() / ".cache/torch/checkpoints/osnet_ain_x1_0_msmt17.pt"
+    # ponytail: pemetaan model_name -> checkpoint lokal masih manual satu-satu.
+    # Kalau nambah model Re-ID baru, tambahkan baris di sini.
+    _reid_checkpoints = {
+        "osnet_ain_x1_0": "osnet_ain_x1_0_msmt17.pt",
+        "resnet50":       "resnet50_market1501_converted.pth",
+    }
+    _ckpt_name = _reid_checkpoints.get(reid_model)
+    _ckpt_path = Path.home() / ".cache/torch/checkpoints" / _ckpt_name if _ckpt_name else None
     extractor = torchreid.utils.FeatureExtractor(
         model_name=reid_model,
-        model_path=str(_msmt17) if _msmt17.exists() else "",
+        model_path=str(_ckpt_path) if _ckpt_path and _ckpt_path.exists() else "",
         device=reid_device,
     )
     tracker_cls, tracker_yaml = _TRACKER_REGISTRY[TRACKER_TYPE]
     print(f"[batch] tracker: {TRACKER_TYPE}")
-    tracker_cfg = YAML.load(check_yaml(tracker_yaml))
-    tracker_args = IterableSimpleNamespace(**tracker_cfg)
+    tracker_args = None
+    if tracker_yaml is not None:
+        tracker_cfg  = YAML.load(check_yaml(tracker_yaml))
+        tracker_args = IterableSimpleNamespace(**tracker_cfg)
 
     # PAR (atribut penampilan, Fase 3) — dijalankan sekali per tracklet pada
     # crop terbaik (lihat _resolve_tracklet di pipeline_service.py), bukan per

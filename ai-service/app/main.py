@@ -60,14 +60,21 @@ async def lifespan(app: FastAPI):
     app.state.stream_manager = StreamManager()
     print("[startup] models ready\n")
 
-    try:
-        app.state.stream_manager.start(
-            yolo_model=YOLO_MODEL, reid_model=REID_MODEL,
-            conf_threshold=DEFAULT_CONF_THRESHOLD, reid_threshold=ASSOC_THRESHOLD,
-        )
-        print("[startup] stream auto-started")
-    except RuntimeError as exc:
-        print(f"[startup] stream tidak auto-start: {exc}")
+    # ponytail: dipakai run_comparison.py — auto-start di boot (tanpa
+    # skip_gallery_restore) sempat nulis ke DB beneran sebelum sempat
+    # di-/stream/stop, nyampur tracklet antar kombinasi (beda dimensi
+    # embedding per model Re-ID). DISABLE_AUTOSTART matiin itu buat evaluasi.
+    if os.getenv("DISABLE_AUTOSTART"):
+        print("[startup] auto-start dilewati (DISABLE_AUTOSTART)")
+    else:
+        try:
+            app.state.stream_manager.start(
+                yolo_model=YOLO_MODEL, reid_model=REID_MODEL,
+                conf_threshold=DEFAULT_CONF_THRESHOLD, reid_threshold=ASSOC_THRESHOLD,
+            )
+            print("[startup] stream auto-started")
+        except RuntimeError as exc:
+            print(f"[startup] stream tidak auto-start: {exc}")
 
     retention_stop = threading.Event()
     retention.start_background(retention_stop)

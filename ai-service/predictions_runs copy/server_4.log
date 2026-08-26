@@ -1,0 +1,436 @@
+/Users/chairulnw/BMS-Tracking/ai-service/.venv/lib/python3.14/site-packages/torchreid/reid/metrics/rank.py:11: UserWarning: Cython evaluation (very fast so highly recommended) is unavailable, now use python evaluation.
+  warnings.warn(
+INFO:     Started server process [49267]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)
+[03:52:51] [startup] device: mps
+[03:52:51] [startup] loading YOLO (yolo26n.pt)…
+[03:52:51] [startup] loading OSNet (osnet_ain_x1_0)…
+[03:52:51] Model: osnet_ain_x1_0
+[03:52:51] - params: 2,193,616
+[03:52:51] - flops: 978,878,352
+[03:52:51] Successfully loaded pretrained weights from "/Users/chairulnw/.cache/torch/checkpoints/osnet_ain_x1_0_msmt17.pt"
+[03:52:51] ** The following layers are discarded due to unmatched keys or layer size: ['classifier.weight', 'classifier.bias']
+[03:52:51] [startup] models ready
+
+[03:52:51] [batch] loading YOLO(yolo26n.pt) → mps, ReID(osnet_ain_x1_0) → mps
+[03:52:52] Model: osnet_ain_x1_0
+[03:52:52] - params: 2,193,616
+[03:52:52] - flops: 978,878,352
+[03:52:52] Successfully loaded pretrained weights from "/Users/chairulnw/.cache/torch/checkpoints/osnet_ain_x1_0_msmt17.pt"
+[03:52:52] ** The following layers are discarded due to unmatched keys or layer size: ['classifier.weight', 'classifier.bias']
+[03:52:52] [batch] tracker: botsort
+[03:52:56] [par] RAP1.pth loaded → device=mps, attrs=6 selected
+[03:52:57] [par] CLIP ViT-B/32 color detector loaded → device=mps
+[03:52:57] [batch] models ready
+[03:52:57] [stream] 5 kamera dari database.
+[03:52:57] [stream] gallery dipulihkan: 5 entri, 1 orang
+[03:52:57] [stream] 5 kamera dimulai (batch mode).
+[03:52:57] [startup] stream auto-started
+[03:52:57] [c8_sim] opened 1920x1080 @ 9.3fps
+[03:52:57] [capture] memutar clip_c8_20260617_150337.avi  fps=9.3
+[03:52:57] [c8_sim] 1 line-zone(s), 0 polygon-zone(s) loaded
+[03:52:57] [c9_sim] opened 1920x1080 @ 9.7fps
+[03:52:57] [c9_sim] 0 line-zone(s), 0 polygon-zone(s) loaded
+[03:52:57] [c10_sim] opened 1920x1080 @ 6.9fps
+[03:52:57] [c10_sim] 1 line-zone(s), 0 polygon-zone(s) loaded
+[03:52:57] [c11_sim] opened 1920x1080 @ 8.3fps
+[03:52:57] [c11_sim] 1 line-zone(s), 0 polygon-zone(s) loaded
+[03:52:57] [c12_sim] opened 1920x1080 @ 7.2fps
+[03:52:57] [c12_sim] 0 line-zone(s), 0 polygon-zone(s) loaded
+[03:52:57] [clip:c8_sim] START → clip_c8_sim_20260826_035257.avi  fps=9.3
+INFO:     127.0.0.1:53866 - "GET /health HTTP/1.1" 200 OK
+[03:52:58] [reid] 03:52:58.366 c8_sim/t1 tracklet ditutup (7 det, 7 sample) → MATCH 'Unknown #1'  (score=0.989)
+[03:52:58] [clip:c8_sim] SAVED clip_c8_sim_20260826_035257.avi  wall=0.5s  frames=5  size=931KB
+[03:52:58] [capture] memutar clip_c9_20260617_150354.avi  fps=9.7
+INFO:     127.0.0.1:53868 - "POST /stream/stop HTTP/1.1" 200 OK
+[03:53:09] [stream] 5 kamera dari database.
+[03:53:09] [stream] skip_gallery_restore=True — IdentityDB mulai kosong.
+[03:53:09] [stream] 5 kamera dimulai (batch mode).
+INFO:     127.0.0.1:53876 - "POST /stream/start HTTP/1.1" 200 OK
+[03:53:09] [c8_sim] opened 1920x1080 @ 9.3fps
+[03:53:09] [capture] memutar clip_c8_20260617_150337.avi  fps=9.3
+INFO:     127.0.0.1:53882 - "GET /stream/status HTTP/1.1" 200 OK
+[03:53:09] [c8_sim] 1 line-zone(s), 0 polygon-zone(s) loaded
+[03:53:09] [c9_sim] opened 1920x1080 @ 9.7fps
+INFO:     127.0.0.1:53884 - "GET /health HTTP/1.1" 200 OK
+[03:53:09] [c9_sim] 0 line-zone(s), 0 polygon-zone(s) loaded
+[03:53:09] [c10_sim] opened 1920x1080 @ 6.9fps
+[03:53:09] [c10_sim] 1 line-zone(s), 0 polygon-zone(s) loaded
+[03:53:09] [c11_sim] opened 1920x1080 @ 8.3fps
+[03:53:09] [c11_sim] 1 line-zone(s), 0 polygon-zone(s) loaded
+[03:53:09] [c12_sim] opened 1920x1080 @ 7.2fps
+[03:53:09] [c12_sim] 0 line-zone(s), 0 polygon-zone(s) loaded
+INFO:     127.0.0.1:53898 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53900 - "GET /health HTTP/1.1" 200 OK
+[03:53:12] [c8_sim] f30  1920x1080  raw=1  tracked=1  [t1(?)]
+INFO:     127.0.0.1:53903 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53905 - "GET /health HTTP/1.1" 200 OK
+[03:53:15] [capture] memutar clip_c9_20260617_150354.avi  fps=9.7
+INFO:     127.0.0.1:53907 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53909 - "GET /health HTTP/1.1" 200 OK
+[03:53:18] [c9_sim] f30  1920x1080  raw=1  tracked=1  [t2(?)]
+INFO:     127.0.0.1:53911 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53913 - "GET /health HTTP/1.1" 200 OK
+[03:53:21] [c9_sim] f60  1920x1080  raw=1  tracked=1  [t2(?)]
+INFO:     127.0.0.1:53915 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53917 - "GET /health HTTP/1.1" 200 OK
+[03:53:24] [c9_sim] f90  1920x1080  raw=1  tracked=1  [t2(?)]
+INFO:     127.0.0.1:53919 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53921 - "GET /health HTTP/1.1" 200 OK
+[03:53:28] [c9_sim] f120  1920x1080  raw=1  tracked=1  [t2(?)]
+INFO:     127.0.0.1:53924 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53926 - "GET /health HTTP/1.1" 200 OK
+[03:53:31] [c9_sim] f150  1920x1080  raw=1  tracked=1  [t2(?)]
+INFO:     127.0.0.1:53929 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53931 - "GET /health HTTP/1.1" 200 OK
+[03:53:34] [c9_sim] f180  1920x1080  raw=1  tracked=1  [t2(?)]
+INFO:     127.0.0.1:53934 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53936 - "GET /health HTTP/1.1" 200 OK
+[03:53:37] [c9_sim] f210  1920x1080  raw=1  tracked=1  [t2(?)]
+INFO:     127.0.0.1:53938 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53940 - "GET /health HTTP/1.1" 200 OK
+[03:53:40] [c9_sim] f240  1920x1080  raw=1  tracked=1  [t2(?)]
+[03:53:42] [capture] memutar clip_c8_20260617_150429.avi  fps=11.6
+[03:53:42] [c8_sim] f60  1920x1080  raw=1  tracked=1  [t4(?)]
+INFO:     127.0.0.1:53942 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53944 - "GET /health HTTP/1.1" 200 OK
+[03:53:42] [reid] 03:53:42.977 c8_sim/t1 tracklet ditutup (48 det, 16 sample) → NEW 'Unknown #1'  (score=-1.000 < thr=0.66 (atau gallery kosong))
+[03:53:45] [c8_sim] f90  1920x1080  raw=1  tracked=1  [t5(?)]
+INFO:     127.0.0.1:53946 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53948 - "GET /health HTTP/1.1" 200 OK
+[03:53:47] [c8_sim] f120  1920x1080  raw=1  tracked=1  [t5(?)]
+[03:53:48] [capture] memutar clip_c10_20260617_152807.avi  fps=6.9
+INFO:     127.0.0.1:53954 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53956 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53958 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53960 - "GET /health HTTP/1.1" 200 OK
+[03:53:52] [c10_sim] f30  1920x1080  raw=2  tracked=2  [t6(?), t7(?)]
+INFO:     127.0.0.1:53962 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53964 - "GET /health HTTP/1.1" 200 OK
+[03:53:56] [capture] memutar clip_c12_20260617_152841.avi  fps=7.2
+INFO:     127.0.0.1:53967 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53969 - "GET /health HTTP/1.1" 200 OK
+[03:53:59] [reid] 03:53:59.987 c12_sim/t9 tracklet ditutup (7 det, 7 sample) → NEW 'Unknown #2'  (score=0.614 < thr=0.66 (atau gallery kosong))
+INFO:     127.0.0.1:53973 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53975 - "GET /health HTTP/1.1" 200 OK
+[03:54:01] [c12_sim] f30  1920x1080  raw=1  tracked=1  [t11(?)]
+[03:54:01] [capture] memutar clip_c11_20260617_152852.avi  fps=8.3
+INFO:     127.0.0.1:53977 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53979 - "GET /health HTTP/1.1" 200 OK
+[03:54:04] [c11_sim] f30  1920x1080  raw=0  tracked=0
+INFO:     127.0.0.1:53981 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53983 - "GET /health HTTP/1.1" 200 OK
+[03:54:08] [c11_sim] f60  1920x1080  raw=1  tracked=1  [t12(?)]
+INFO:     127.0.0.1:53986 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53988 - "GET /health HTTP/1.1" 200 OK
+[03:54:11] [c11_sim] f90  1920x1080  raw=2  tracked=2  [t14(?), t12(?)]
+INFO:     127.0.0.1:53991 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53993 - "GET /health HTTP/1.1" 200 OK
+[03:54:15] [c11_sim] f120  1920x1080  raw=2  tracked=2  [t14(?), t12(?)]
+INFO:     127.0.0.1:53997 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53999 - "GET /health HTTP/1.1" 200 OK
+[03:54:18] [reid] 03:54:18.816 c11_sim/t14 tracklet ditutup (61 det, 16 sample) → NEW 'Unknown #3'  (score=0.675 >= thr, tapi margin top1/top2 < 0.05)
+INFO:     127.0.0.1:54003 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54005 - "GET /health HTTP/1.1" 200 OK
+[03:54:19] [c11_sim] f150  1920x1080  raw=1  tracked=1  [t12(?)]
+INFO:     127.0.0.1:54007 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54009 - "GET /health HTTP/1.1" 200 OK
+[03:54:22] [c11_sim] f180  1920x1080  raw=1  tracked=1  [t12(?)]
+[03:54:23] [reid] 03:54:23.695 c11_sim/t15 tracklet ditutup (26 det, 16 sample) → MATCH 'Unknown #3'  (score=0.819)
+INFO:     127.0.0.1:54011 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54013 - "GET /health HTTP/1.1" 200 OK
+[03:54:26] [c11_sim] f210  1920x1080  raw=0  tracked=0
+INFO:     127.0.0.1:54015 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54017 - "GET /health HTTP/1.1" 200 OK
+[03:54:29] [c11_sim] f240  1920x1080  raw=1  tracked=1  [t12(?)]
+INFO:     127.0.0.1:54021 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54023 - "GET /health HTTP/1.1" 200 OK
+[03:54:33] [c11_sim] f270  1920x1080  raw=1  tracked=1  [t12(?)]
+INFO:     127.0.0.1:54025 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54027 - "GET /health HTTP/1.1" 200 OK
+[03:54:34] [capture] memutar clip_c11_20260618_154736.avi  fps=25.0
+[03:54:34] [reid] 03:54:34.836 c11_sim/t12 tracklet ditutup (216 det, 16 sample) → NEW 'Unknown #4'  (score=0.538 < thr=0.66 (atau gallery kosong))
+[03:54:35] [c11_sim] f300  1920x1080  raw=1  tracked=1  [t16(?)]
+[03:54:36] [c11_sim] f330  1920x1080  raw=1  tracked=1  [t16(?)]
+INFO:     127.0.0.1:54029 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54031 - "GET /health HTTP/1.1" 200 OK
+[03:54:37] [c11_sim] f360  1920x1080  raw=1  tracked=1  [t16(?)]
+[03:54:38] [reid] 03:54:38.653 c11_sim/t16 tracklet ditutup (82 det, 16 sample) → NEW 'Unknown #5'  (score=0.542 < thr=0.66 (atau gallery kosong))
+[03:54:38] [c11_sim] f390  1920x1080  raw=1  tracked=1  [t17(?)]
+[03:54:39] [capture] memutar clip_c12_20260618_154814.avi  fps=8.6
+INFO:     127.0.0.1:54033 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54035 - "GET /health HTTP/1.1" 200 OK
+[03:54:40] [capture] memutar clip_c10_20260618_154820.avi  fps=8.8
+[03:54:40] [reid] 03:54:40.364 c10_sim/t6 tracklet ditutup (39 det, 16 sample) → MATCH 'Unknown #4'  (score=0.835)
+[03:54:40] [c10_sim] f60  1920x1080  raw=0  tracked=0
+INFO:     127.0.0.1:54038 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54040 - "GET /health HTTP/1.1" 200 OK
+[03:54:43] [c10_sim] f90  1920x1080  raw=1  tracked=1  [t7(?)]
+[03:54:44] [capture] memutar clip_c10_20260618_155056.avi  fps=5.5
+INFO:     127.0.0.1:54042 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54044 - "GET /health HTTP/1.1" 200 OK
+[03:54:46] [reid] 03:54:46.660 c10_sim/t7 tracklet ditutup (71 det, 16 sample) → NEW 'Unknown #6'  (score=0.764 >= thr, tapi margin top1/top2 < 0.05)
+[03:54:48] [c10_sim] f120  1920x1080  raw=1  tracked=1  [t20(?)]
+INFO:     127.0.0.1:54046 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54048 - "GET /health HTTP/1.1" 200 OK
+[03:54:49] [capture] memutar clip_c11_20260618_155113.avi  fps=6.6
+[03:54:51] [reid] 03:54:51.397 c11_sim/t17 tracklet ditutup (28 det, 16 sample) → MATCH 'Unknown #5'  (score=0.865)
+INFO:     127.0.0.1:54050 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54052 - "GET /health HTTP/1.1" 200 OK
+[03:54:52] [c11_sim] f420  1920x1080  raw=1  tracked=1  [t21(?)]
+[03:54:54] [reid] 03:54:54.562 c11_sim/t21 tracklet ditutup (1 det, 1 sample) → NEW 'Unknown #7'  (score=0.576 < thr=0.66 (atau gallery kosong))
+INFO:     127.0.0.1:54054 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54056 - "GET /health HTTP/1.1" 200 OK
+[03:54:56] [c11_sim] f450  1920x1080  raw=1  tracked=1  [t22(?)]
+INFO:     127.0.0.1:54060 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54062 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54066 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54068 - "GET /health HTTP/1.1" 200 OK
+[03:55:01] [c11_sim] f480  1920x1080  raw=1  tracked=1  [t22(?)]
+[03:55:02] [capture] memutar clip_c11_20260622_093444.avi  fps=10.8
+INFO:     127.0.0.1:54070 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54072 - "GET /health HTTP/1.1" 200 OK
+[03:55:04] [c11_sim] f510  1920x1080  raw=2  tracked=2  [t22(?), t23(?)]
+INFO:     127.0.0.1:54076 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54078 - "GET /health HTTP/1.1" 200 OK
+[03:55:07] [c11_sim] f540  1920x1080  raw=2  tracked=2  [t22(?), t23(?)]
+[03:55:10] [c11_sim] f570  1920x1080  raw=2  tracked=2  [t23(?), t22(?)]
+INFO:     127.0.0.1:54081 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54083 - "GET /health HTTP/1.1" 200 OK
+[03:55:12] [reid] 03:55:12.811 c11_sim/t22 tracklet ditutup (129 det, 16 sample) → MATCH 'Unknown #5'  (score=0.744)
+[03:55:12] [c11_sim] f600  1920x1080  raw=1  tracked=1  [t26(?)]
+[03:55:13] [reid] 03:55:13.234 c11_sim/t23 tracklet ditutup (102 det, 16 sample) → NEW 'Unknown #8'  (score=0.610 < thr=0.66 (atau gallery kosong))
+INFO:     127.0.0.1:54085 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54087 - "GET /health HTTP/1.1" 200 OK
+[03:55:13] [reid] 03:55:13.358 c11_sim/t25 tracklet ditutup (10 det, 10 sample) → MATCH 'Unknown #5'  (score=0.905)
+[03:55:15] [c11_sim] f630  1920x1080  raw=1  tracked=1  [t26(?)]
+INFO:     127.0.0.1:54089 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54091 - "GET /health HTTP/1.1" 200 OK
+[03:55:17] [capture] memutar clip_c9_20260622_093510.avi  fps=6.3
+INFO:     127.0.0.1:54095 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54097 - "GET /health HTTP/1.1" 200 OK
+[03:55:19] [c9_sim] f270  1920x1080  raw=1  tracked=1  [t29(?)]
+[03:55:20] [reid] 03:55:20.038 c9_sim/t2 tracklet ditutup (254 det, 16 sample) → MATCH 'Unknown #1'  (score=0.666)
+INFO:     127.0.0.1:54099 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54101 - "GET /health HTTP/1.1" 200 OK
+[03:55:22] [reid] 03:55:22.412 c9_sim/t29 tracklet ditutup (4 det, 4 sample) → NEW 'Unknown #9'  (score=0.628 < thr=0.66 (atau gallery kosong))
+[03:55:24] [c9_sim] f300  1920x1080  raw=2  tracked=2  [t28(?), t30(?)]
+INFO:     127.0.0.1:54103 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54105 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54108 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54110 - "GET /health HTTP/1.1" 200 OK
+[03:55:28] [reid] 03:55:28.900 c9_sim/t28 tracklet ditutup (32 det, 16 sample) → NEW 'Unknown #10'  (score=0.793 >= thr, tapi margin top1/top2 < 0.05)
+[03:55:29] [c9_sim] f330  1920x1080  raw=1  tracked=1  [t30(?)]
+INFO:     127.0.0.1:54113 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54115 - "GET /health HTTP/1.1" 200 OK
+[03:55:33] [c9_sim] f360  1920x1080  raw=1  tracked=1  [t32(?)]
+INFO:     127.0.0.1:54117 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54119 - "GET /health HTTP/1.1" 200 OK
+[03:55:34] [reid] 03:55:34.417 c9_sim/t30 tracklet ditutup (50 det, 16 sample) → NEW 'Unknown #11'  (score=0.823 >= thr, tapi margin top1/top2 < 0.05)
+[03:55:35] [capture] memutar clip_c8_20260622_093541.avi  fps=5.5
+INFO:     127.0.0.1:54122 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54124 - "GET /health HTTP/1.1" 200 OK
+[03:55:37] [reid] 03:55:37.585 c8_sim/t5 tracklet ditutup (52 det, 16 sample) → MATCH 'Unknown #1'  (score=0.828)
+[03:55:39] [c8_sim] f150  1920x1080  raw=2  tracked=2  [t40(?), t41(?)]
+INFO:     127.0.0.1:54126 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54128 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54134 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54136 - "GET /health HTTP/1.1" 200 OK
+[03:55:44] [c8_sim] f180  1920x1080  raw=1  tracked=1  [t41(?)]
+INFO:     127.0.0.1:54138 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54140 - "GET /health HTTP/1.1" 200 OK
+[03:55:47] [reid] 03:55:47.084 c8_sim/t40 tracklet ditutup (29 det, 16 sample) → NEW 'Unknown #12'  (score=0.875 >= thr, tapi margin top1/top2 < 0.05)
+[03:55:47] [capture] memutar clip_c11_20260727_145025.avi  fps=5.0
+[03:55:48] [c11_sim] f660  1920x1080  raw=0  tracked=0
+INFO:     127.0.0.1:54142 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54144 - "GET /health HTTP/1.1" 200 OK
+[03:55:50] [reid] 03:55:50.601 c11_sim/t26 tracklet ditutup (54 det, 16 sample) → NEW 'Unknown #13'  (score=0.687 >= thr, tapi margin top1/top2 < 0.05)
+[03:55:51] [capture] memutar clip_c9_20260727_145031.avi  fps=5.0
+INFO:     127.0.0.1:54146 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54148 - "GET /health HTTP/1.1" 200 OK
+[03:55:53] [reid] 03:55:53.003 c9_sim/t32 tracklet ditutup (20 det, 16 sample) → NEW 'Unknown #14'  (score=0.861 >= thr, tapi margin top1/top2 < 0.05)
+[03:55:53] [reid] 03:55:53.792 c9_sim/t34 tracklet ditutup (3 det, 3 sample) → NEW 'Unknown #15'  (score=0.850 >= thr, tapi margin top1/top2 < 0.05)
+[03:55:54] [reid] 03:55:54.007 c9_sim/t35 tracklet ditutup (2 det, 2 sample) → NEW 'Unknown #16'  (score=0.823 >= thr, tapi margin top1/top2 < 0.05)
+INFO:     127.0.0.1:54150 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54152 - "GET /health HTTP/1.1" 200 OK
+[03:55:55] [c9_sim] f390  1920x1080  raw=0  tracked=0
+INFO:     127.0.0.1:54156 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54158 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54161 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54163 - "GET /health HTTP/1.1" 200 OK
+[03:56:02] [c9_sim] f420  1920x1080  raw=1  tracked=1  [t44(?)]
+INFO:     127.0.0.1:54165 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54167 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54169 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54171 - "GET /health HTTP/1.1" 200 OK
+[03:56:08] [c9_sim] f450  1920x1080  raw=0  tracked=0
+[03:56:08] [capture] memutar clip_c8_20260727_145055.avi  fps=5.0
+INFO:     127.0.0.1:54174 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54176 - "GET /health HTTP/1.1" 200 OK
+[03:56:10] [c8_sim] f210  1920x1080  raw=1  tracked=1  [t46(?)]
+[03:56:11] [reid] 03:56:11.260 c8_sim/t41 tracklet ditutup (48 det, 16 sample) → NEW 'Unknown #17'  (score=0.917 >= thr, tapi margin top1/top2 < 0.05)
+INFO:     127.0.0.1:54178 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54180 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54187 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54189 - "GET /health HTTP/1.1" 200 OK
+[03:56:16] [c8_sim] f240  1920x1080  raw=0  tracked=0
+[03:56:17] [reid] 03:56:17.619 c8_sim/t46 tracklet ditutup (28 det, 16 sample) → NEW 'Unknown #18'  (score=0.610 < thr=0.66 (atau gallery kosong))
+INFO:     127.0.0.1:54191 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54193 - "GET /health HTTP/1.1" 200 OK
+[03:56:20] [capture] memutar clip_c10_20260727_145319.avi  fps=5.0
+INFO:     127.0.0.1:54195 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54197 - "GET /health HTTP/1.1" 200 OK
+[03:56:22] [reid] 03:56:22.851 c10_sim/t20 tracklet ditutup (22 det, 16 sample) → MATCH 'Unknown #7'  (score=0.725)
+INFO:     127.0.0.1:54199 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54201 - "GET /health HTTP/1.1" 200 OK
+[03:56:25] [c10_sim] f150  1920x1080  raw=0  tracked=0
+[03:56:26] [capture] memutar clip_c12_20260727_145330.avi  fps=5.0
+[03:56:28] [reid] 03:56:28.429 c12_sim/t10 tracklet ditutup (14 det, 14 sample) → MATCH 'Unknown #4'  (score=0.871)
+[03:56:28] [capture] memutar clip_c11_20260727_145334.avi  fps=5.0
+INFO:     127.0.0.1:54204 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54206 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54209 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54211 - "GET /health HTTP/1.1" 200 OK
+[03:56:31] [c11_sim] f690  1920x1080  raw=0  tracked=0
+INFO:     127.0.0.1:54213 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54215 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54217 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54219 - "GET /health HTTP/1.1" 200 OK
+[03:56:37] [c11_sim] f720  1920x1080  raw=1  tracked=1  [t49(?)]
+[03:56:40] [capture] memutar clip_c11_20260727_145653.avi  fps=5.0
+INFO:     127.0.0.1:54222 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54224 - "GET /health HTTP/1.1" 200 OK
+[03:56:41] [reid] 03:56:41.281 c11_sim/t49 tracklet ditutup (37 det, 16 sample) → NEW 'Unknown #19'  (score=0.635 < thr=0.66 (atau gallery kosong))
+[03:56:43] [reid] 03:56:43.682 c11_sim/t50 tracklet ditutup (7 det, 4 sample) → NEW 'Unknown #20'  (score=0.625 < thr=0.66 (atau gallery kosong))
+INFO:     127.0.0.1:54226 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54228 - "GET /health HTTP/1.1" 200 OK
+[03:56:43] [c11_sim] f750  1920x1080  raw=1  tracked=1  [t51(?)]
+INFO:     127.0.0.1:54230 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54232 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54234 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54236 - "GET /health HTTP/1.1" 200 OK
+[03:56:49] [c11_sim] f780  1920x1080  raw=0  tracked=0
+INFO:     127.0.0.1:54238 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54240 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54242 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54244 - "GET /health HTTP/1.1" 200 OK
+[03:56:55] [c11_sim] f810  1920x1080  raw=0  tracked=0
+[03:56:58] [capture] memutar clip_c12_20260727_145716.avi  fps=5.0
+INFO:     127.0.0.1:54247 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54249 - "GET /health HTTP/1.1" 200 OK
+[03:56:59] [reid] 03:56:59.852 c12_sim/t11 tracklet ditutup (4 det, 4 sample) → MATCH 'Unknown #4'  (score=0.827)
+[03:57:00] [c12_sim] f60  1920x1080  raw=0  tracked=0
+[03:57:01] [capture] memutar clip_c10_20260727_145721.avi  fps=5.0
+[03:57:01] [c12_sim] semua clip selesai
+INFO:     127.0.0.1:54253 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54255 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54257 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54259 - "GET /health HTTP/1.1" 200 OK
+[03:57:05] [capture] memutar clip_c11_20260727_150629.avi  fps=5.0
+[03:57:06] [reid] 03:57:06.700 c11_sim/t51 tracklet ditutup (60 det, 16 sample) → NEW 'Unknown #21'  (score=0.784 >= thr, tapi margin top1/top2 < 0.05)
+INFO:     127.0.0.1:54263 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54265 - "GET /health HTTP/1.1" 200 OK
+[03:57:09] [c11_sim] f840  1920x1080  raw=1  tracked=1  [t52(?)]
+INFO:     127.0.0.1:54267 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54269 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54271 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54273 - "GET /health HTTP/1.1" 200 OK
+[03:57:15] [c11_sim] f870  1920x1080  raw=1  tracked=1  [t52(?)]
+INFO:     127.0.0.1:54275 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54277 - "GET /health HTTP/1.1" 200 OK
+[03:57:18] [reid] 03:57:18.072 c11_sim/t52 tracklet ditutup (38 det, 16 sample) → NEW 'Unknown #22'  (score=0.628 < thr=0.66 (atau gallery kosong))
+[03:57:19] [capture] memutar clip_c9_20260727_150719.avi  fps=5.0
+INFO:     127.0.0.1:54279 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54281 - "GET /health HTTP/1.1" 200 OK
+[03:57:21] [reid] 03:57:21.274 c9_sim/t44 tracklet ditutup (54 det, 16 sample) → MATCH 'Unknown #18'  (score=0.712)
+INFO:     127.0.0.1:54284 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54286 - "GET /health HTTP/1.1" 200 OK
+[03:57:24] [c9_sim] f480  1920x1080  raw=0  tracked=0
+INFO:     127.0.0.1:54288 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54290 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54294 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54296 - "GET /health HTTP/1.1" 200 OK
+[03:57:30] [c9_sim] f510  1920x1080  raw=1  tracked=1  [t53(?)]
+INFO:     127.0.0.1:54299 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54301 - "GET /health HTTP/1.1" 200 OK
+[03:57:33] [capture] memutar clip_c8_20260727_150740.avi  fps=5.0
+INFO:     127.0.0.1:54305 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54307 - "GET /health HTTP/1.1" 200 OK
+[03:57:35] [c8_sim] f270  1920x1080  raw=0  tracked=0
+INFO:     127.0.0.1:54310 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54312 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54315 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54317 - "GET /health HTTP/1.1" 200 OK
+[03:57:41] [c8_sim] f300  1920x1080  raw=0  tracked=0
+[03:57:43] [reid] 03:57:43.906 c8_sim/t54 tracklet ditutup (23 det, 16 sample) → MATCH 'Unknown #22'  (score=0.901)
+INFO:     127.0.0.1:54319 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54321 - "GET /health HTTP/1.1" 200 OK
+[03:57:44] [capture] memutar clip_c10_20260727_165919.avi  fps=5.0
+[03:57:45] [c10_sim] f180  1920x1080  raw=0  tracked=0
+INFO:     127.0.0.1:54323 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54325 - "GET /health HTTP/1.1" 200 OK
+[03:57:47] [reid] 03:57:47.513 c10_sim/t47 tracklet ditutup (45 det, 16 sample) → MATCH 'Unknown #20'  (score=0.786)
+INFO:     127.0.0.1:54328 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54330 - "GET /health HTTP/1.1" 200 OK
+[03:57:51] [c10_sim] f210  1920x1080  raw=1  tracked=1  [t56(?)]
+INFO:     127.0.0.1:54332 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54334 - "GET /health HTTP/1.1" 200 OK
+[03:57:54] [capture] memutar clip_c11_20260727_170139.avi  fps=5.0
+[03:57:54] [c10_sim] semua clip selesai
+INFO:     127.0.0.1:54346 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54348 - "GET /health HTTP/1.1" 200 OK
+[03:57:56] [c11_sim] f900  1920x1080  raw=1  tracked=1  [t57(?)]
+INFO:     127.0.0.1:54352 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54354 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54357 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54359 - "GET /health HTTP/1.1" 200 OK
+[03:58:02] [c11_sim] f930  1920x1080  raw=0  tracked=0
+INFO:     127.0.0.1:54361 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54363 - "GET /health HTTP/1.1" 200 OK
+[03:58:07] [capture] memutar clip_c11_20260813_134940.avi  fps=24.0
+[03:58:07] [reid] 03:58:07.442 c11_sim/t57 tracklet ditutup (42 det, 16 sample) → NEW 'Unknown #23'  (score=0.599 < thr=0.66 (atau gallery kosong))
+[03:58:07] [c11_sim] f960  1920x1080  raw=0  tracked=0
+[03:58:07] [reid] 03:58:07.998 c11_sim/t58 tracklet ditutup (1 det, 1 sample) → NEW 'Unknown #24'  (score=0.619 < thr=0.66 (atau gallery kosong))
+INFO:     127.0.0.1:54366 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54368 - "GET /health HTTP/1.1" 200 OK
+[03:58:08] [c11_sim] f990  1920x1080  raw=1  tracked=1  [t59(?)]
+[03:58:09] [c11_sim] f1020  1920x1080  raw=1  tracked=1  [t59(?)]
+[03:58:11] [c11_sim] f1050  1920x1080  raw=1  tracked=1  [t59(?)]
+INFO:     127.0.0.1:54370 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54372 - "GET /health HTTP/1.1" 200 OK
+[03:58:12] [c11_sim] f1080  1920x1080  raw=1  tracked=1  [t59(?)]
+[03:58:12] [capture] memutar clip_c9_20260813_134952.avi  fps=36.5
+[03:58:12] [c11_sim] semua clip selesai
+[03:58:13] [reid] 03:58:13.320 c9_sim/t53 tracklet ditutup (34 det, 16 sample) → MATCH 'Unknown #22'  (score=0.755)
+[03:58:13] [c9_sim] f540  1920x1080  raw=1  tracked=1  [t60(?)]
+INFO:     127.0.0.1:54374 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54376 - "GET /health HTTP/1.1" 200 OK
+[03:58:14] [c9_sim] f570  1920x1080  raw=1  tracked=1  [t60(?)]
+[03:58:15] [c9_sim] f600  1920x1080  raw=1  tracked=1  [t60(?)]
+[03:58:16] [c9_sim] f630  1920x1080  raw=1  tracked=1  [t60(?)]
+INFO:     127.0.0.1:54378 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54380 - "GET /health HTTP/1.1" 200 OK
+[03:58:17] [c9_sim] f660  1920x1080  raw=1  tracked=1  [t60(?)]
+[03:58:18] [capture] memutar clip_c8_20260813_135011.avi  fps=19.7
+[03:58:18] [c9_sim] semua clip selesai
+[03:58:19] [c8_sim] f330  1920x1080  raw=1  tracked=0
+INFO:     127.0.0.1:54383 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54385 - "GET /health HTTP/1.1" 200 OK
+[03:58:20] [c8_sim] f360  1920x1080  raw=1  tracked=1  [t63(?)]
+[03:58:22] [c8_sim] f390  1920x1080  raw=1  tracked=1  [t63(?)]
+INFO:     127.0.0.1:54387 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54389 - "GET /health HTTP/1.1" 200 OK
+[03:58:23] [c8_sim] semua clip selesai
+[03:58:23] [reid] 03:58:23.494 c12_sim/t10 tracklet ditutup (1 det, 1 sample) → NEW 'Unknown #25'  (score=0.770 >= thr, tapi margin top1/top2 < 0.05)
+[03:58:23] [reid] 03:58:23.494 c10_sim/t56 tracklet ditutup (26 det, 16 sample) → MATCH 'Unknown #23'  (score=0.935)
+[03:58:23] [reid] 03:58:23.494 c11_sim/t59 tracklet ditutup (116 det, 16 sample) → MATCH 'Unknown #24'  (score=0.843)
+[03:58:23] [reid] 03:58:23.495 c9_sim/t60 tracklet ditutup (141 det, 16 sample) → MATCH 'Unknown #24'  (score=0.862)
+[03:58:23] [reid] 03:58:23.495 c8_sim/t63 tracklet ditutup (73 det, 16 sample) → NEW 'Unknown #26'  (score=0.735 >= thr, tapi margin top1/top2 < 0.05)
+INFO:     127.0.0.1:54391 - "GET /stream/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54393 - "GET /health HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [49267]

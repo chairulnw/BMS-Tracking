@@ -99,6 +99,7 @@ class StreamManager:
                     reid_threshold    = reid_threshold,
                     stop_event        = self._stop_event,
                     analytics_enabled = cfg.get("analytics_enabled", True),
+                    skip_recording    = skip_gallery_restore,
                 )
                 for cfg in cam_configs
             ]
