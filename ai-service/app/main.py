@@ -49,13 +49,17 @@ async def lifespan(app: FastAPI):
     print(f"[startup] loading YOLO ({YOLO_MODEL})…")
     app.state.detector = YOLO(YOLO_MODEL)
 
-    print(f"[startup] loading OSNet ({REID_MODEL})…")
-    _msmt17 = Path.home() / ".cache/torch/checkpoints/osnet_ain_x1_0_msmt17.pt"
-    app.state.extractor = torchreid.utils.FeatureExtractor(
-        model_name=REID_MODEL,
-        model_path=str(_msmt17) if _msmt17.exists() else "",
-        device=device,
-    )
+    print(f"[startup] loading ReID ({REID_MODEL})…")
+    if REID_MODEL == "transreid":
+        from app.services.stream_service.transreid_extractor import TransReIDExtractor
+        app.state.extractor = TransReIDExtractor(device=device)
+    else:
+        _msmt17 = Path.home() / ".cache/torch/checkpoints/osnet_ain_x1_0_msmt17.pt"
+        app.state.extractor = torchreid.utils.FeatureExtractor(
+            model_name=REID_MODEL,
+            model_path=str(_msmt17) if _msmt17.exists() else "",
+            device=device,
+        )
 
     app.state.stream_manager = StreamManager()
     print("[startup] models ready\n")

@@ -108,13 +108,17 @@ def load_model_bundle(yolo_model: str, reid_model: str) -> _ModelBundle:
         "osnet_ain_x1_0": "osnet_ain_x1_0_msmt17.pt",
         "resnet50":       "resnet50_market1501_converted.pth",
     }
-    _ckpt_name = _reid_checkpoints.get(reid_model)
-    _ckpt_path = Path.home() / ".cache/torch/checkpoints" / _ckpt_name if _ckpt_name else None
-    extractor = torchreid.utils.FeatureExtractor(
-        model_name=reid_model,
-        model_path=str(_ckpt_path) if _ckpt_path and _ckpt_path.exists() else "",
-        device=reid_device,
-    )
+    if reid_model == "transreid":
+        from app.services.stream_service.transreid_extractor import TransReIDExtractor
+        extractor = TransReIDExtractor(device=reid_device)
+    else:
+        _ckpt_name = _reid_checkpoints.get(reid_model)
+        _ckpt_path = Path.home() / ".cache/torch/checkpoints" / _ckpt_name if _ckpt_name else None
+        extractor = torchreid.utils.FeatureExtractor(
+            model_name=reid_model,
+            model_path=str(_ckpt_path) if _ckpt_path and _ckpt_path.exists() else "",
+            device=reid_device,
+        )
     tracker_cls, tracker_yaml = _TRACKER_REGISTRY[TRACKER_TYPE]
     print(f"[batch] tracker: {TRACKER_TYPE}")
     tracker_args = None

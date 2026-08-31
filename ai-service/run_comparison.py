@@ -119,8 +119,11 @@ def run_one(idx: int, yolo_model: str, tracker_type: str, reid_model: str) -> di
         time.sleep(2)
 
         stream_start_t = time.monotonic()
+        # timeout tinggi: /stream/start me-load model Re-ID kedua kalinya (cache
+        # StreamManager terpisah dari app.state), yang buat TransReID (ViT-B,
+        # 86M param + first-run MPS kernel compile) bisa >15s.
         r = requests.post(f"{BASE_URL}/stream/start", json={"skip_gallery_restore": True},
-                           headers=_AUTH_HEADERS, timeout=15)
+                           headers=_AUTH_HEADERS, timeout=120)
         r.raise_for_status()
 
         # Sampel CPU/RAM selama stream jalan (dari /health, sumbernya psutil —

@@ -200,7 +200,7 @@ CREATE TABLE IF NOT EXISTS tracklets (
     ended_at           TIMESTAMPTZ NOT NULL,
     n_detections       INTEGER     NOT NULL,
     best_thumbnail_url TEXT,
-    embedding          vector(512),   -- rata-rata top-K crop terbaik, L2-normalized
+    embedding          vector(3840),  -- rata-rata top-K crop terbaik, L2-normalized (TransReID ViT-B/16, 768*5)
     assoc_score        REAL,
     attrs              JSONB,         -- diisi Fase 3 (atribut PAR)
     pos_x              INTEGER,       -- titik kaki (foot point) sampel ber-confidence tertinggi (fallback lama),
@@ -212,6 +212,21 @@ CREATE TABLE IF NOT EXISTS tracklets (
 ALTER TABLE tracklets ADD COLUMN IF NOT EXISTS pos_x INTEGER;
 ALTER TABLE tracklets ADD COLUMN IF NOT EXISTS pos_y INTEGER;
 ALTER TABLE tracklets ADD COLUMN IF NOT EXISTS positions JSONB;
+
+-- Migrasi OSNet (512-dim) -> TransReID (3840-dim, Subbab Analisis Pemilihan
+-- Solusi). Embedding lama tidak bisa dikonversi dimensinya, jadi diset NULL
+-- (galeri identitas dibangun ulang dari nol memakai TransReID).
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'tracklets' AND column_name = 'embedding'
+          AND udt_name = 'vector' AND character_maximum_length IS NULL
+    ) THEN
+        UPDATE tracklets SET embedding = NULL;
+        ALTER TABLE tracklets ALTER COLUMN embedding TYPE vector(3840);
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_tracklets_person_started
     ON tracklets (person_id, started_at DESC);

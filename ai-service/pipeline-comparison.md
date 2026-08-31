@@ -84,4 +84,45 @@ precision/recall gaya B-cubed yang diadaptasi di sini.
 
 ## Kesimpulan
 
-_(diisi setelah 7 run prioritas selesai — komponen mana yang dipertahankan/diganti dari baseline, dan alasannya.)_
+**Komponen terpilih: YOLO26n + ByteTrack + TransReID (ViT-B/16*)** — kombinasi
+#2, menggantikan OSNet sebagai model Re-ID pada baseline.
+
+Baris TransReID pada tabel di atas masih "Belum" karena prediksinya cuma
+dijalankan untuk 27 dari 31 klip (skip 3 klip yang sama dengan yang
+dikecualikan di `predictions_runs copy/pipeline-comparison copy.md`) —
+mengevaluasinya ke GT 14-orang di sini akan salah menghukum person 8/9/10
+dengan skor 0% padahal memang belum pernah diproses. Keputusan pemilihan
+komponen di bawah ini didasarkan pada hasil lengkap 27 kombinasi di tabel
+copy tersebut, bukan tabel ini.
+
+Perbandingan langsung #1 (baseline, OSNet) vs #2 (TransReID) — detektor &
+tracker sama persis, cuma model Re-ID yang beda — di dataset copy (11 orang):
+
+| Metrik | #1 OSNet | #2 TransReID |
+| --- | --- | --- |
+| Precision | 0.863 | **0.997** |
+| Recall | **0.943** | 0.906 |
+| F1 | 0.902 | **0.949** |
+| Akurasi | 6/11 (54.5%) | 6/11 (54.5%) |
+| Identitas terbentuk | 12/11 | 17/11 |
+| CPU peak | **74%** | **14%** |
+
+**Alasan pemilihan:**
+1. **F1 lebih tinggi** (0.949 vs 0.902) — metrik utama karena dihitung dari
+   ratusan pasangan kemunculan, lebih stabil secara statistik dibanding
+   Akurasi yang cuma dari 11 orang GT.
+2. **Precision nyaris sempurna (0.997)** — TransReID nyaris tidak pernah
+   salah menggabungkan dua orang berbeda jadi satu identitas, kesalahan yang
+   paling mahal secara operasional karena tidak ada jalan koreksi otomatis
+   (lihat `plan/06-decisions.md`, ADR-002).
+3. **CPU peak jauh lebih rendah** (14% vs 74%) — krusial untuk stabilitas
+   sistem yang berjalan 24/7 di hardware tanpa GPU *discrete*; OSNet berisiko
+   *throttling*/*swap* kalau load kamera bertambah.
+
+**Trade-off yang diterima:** TransReID menghasilkan lebih banyak identitas
+(17/11) karena Recall-nya lebih rendah — orang yang sama kadang dianggap
+identitas baru kalau sudut kamera/pencahayaan berubah signifikan
+(*over-segmentation*, false split naik dari 3 ke 5). Ini dianggap trade-off
+yang lebih bisa diterima dibanding risiko *false merge* (privasi/keamanan:
+menyamakan dua orang berbeda), dan konsisten dengan prioritas F1/Precision
+sebagai metrik utama evaluasi.
