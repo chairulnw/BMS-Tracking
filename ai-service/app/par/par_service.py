@@ -7,7 +7,7 @@ Attributes scored : subset dipilih di SELECTED_ATTRS (lihat N_ATTRS untuk jumlah
 persisnya) — nama atribut memakai string asli RAP1_ATTR_WORDS, tidak diterjemahkan.
 
 Usage:
-    par = PARExtractor("par_checkpoints/RAP1.pth", device="cpu")
+    par = PARExtractor("checkpoints/par_checkpoints/RAP1.pth", device="cpu")
     probs  = par.extract(bgr_crop)          # float32 (N_ATTRS,) probabilities
     binary = par.attribute_vector(bgr_crop) # float32 (N_ATTRS,) binary @ threshold 0.45
     score  = PARExtractor.attribute_similarity(a, b)  # [0,1] match ratio

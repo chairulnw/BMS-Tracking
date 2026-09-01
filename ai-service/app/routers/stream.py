@@ -10,7 +10,7 @@ def stream_start(req: StreamStartRequest, request: Request) -> StreamStatusRespo
     manager = request.app.state.stream_manager
     try:
         manager.start(
-            yolo_model=request.app.state.yolo_model,
+            detector_model=request.app.state.detector_model,
             reid_model=request.app.state.reid_model,
             conf_threshold=req.conf_threshold,
             reid_threshold=req.reid_threshold,

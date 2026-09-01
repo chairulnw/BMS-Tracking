@@ -273,6 +273,7 @@ class CameraEventResponse(BaseModel):
     snapshot_url: str | None
     person_label: str | None
     timestamp:    datetime
+    created_at:   datetime   # jam backend insert — buat hitung network/backend delay vs `timestamp` (jam AI)
     acknowledged:    bool
     acknowledged_at: datetime | None
 
@@ -306,6 +307,7 @@ class DetectionResponse(BaseModel):
     person_id:  int
     camera_id:  str
     timestamp:  datetime
+    created_at: datetime   # jam backend insert — buat hitung network/backend delay vs `timestamp` (jam AI)
     confidence: float
     method:     str
 
@@ -326,7 +328,7 @@ class TrackletCreate(BaseModel):
     ended_at:             datetime
     n_detections:         int
     best_thumbnail_url:   str | None = None
-    embedding:            list[float]         # 512-dim OSNet, L2-normalized
+    embedding:            list[float]         # 3840-dim TransReID (768*5, JPM+global), L2-normalized
     assoc_score:          float | None = None
     attrs:                dict | None = None  # skor mentah PAR (Fase 3), None kalau PAR nonaktif
     pos_x:                int | None = None  # titik kaki sampel ber-confidence tertinggi (fallback lama)

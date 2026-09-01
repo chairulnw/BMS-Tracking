@@ -81,6 +81,7 @@ class _CamSlot:
         # Metadata frame terbaru saat mode playlist file (untuk _PredictionLogger)
         self.last_source_clip: str | None     = None
         self.last_local_frame: int | None     = None
+        self.last_decode_ms:   float          = 0.0   # durasi cap.read() terakhir (_LatencyLogger)
 
         # Zona (line + polygon) yang dipantau kamera ini
         self.zones: list[dict]                             = []
@@ -257,7 +258,9 @@ class _CamSlot:
         """Hanya baca cap.read() dan simpan frame terbaru. RTSP tetap hidup
         terlepas dari seberapa lambat batch inference berjalan."""
         while not stop.is_set():
+            _t0 = time.perf_counter()
             ok, frame = cap.read()
+            decode_ms = (time.perf_counter() - _t0) * 1000
             if not ok:
                 while True:
                     try:
@@ -272,7 +275,11 @@ class _CamSlot:
                 except queue.Empty:
                     pass
             try:
-                frame_q.put_nowait(frame)
+                # item selalu (frame, decode_ms, source_clip, local_frame) —
+                # None dua terakhir buat RTSP (bukan file-playlist), disamain
+                # sama _capture_loop_files() biar consumer di batch_processor.py
+                # unpack satu bentuk aja, bukan cek isinstance tuple/ndarray.
+                frame_q.put_nowait((frame, decode_ms, None, None))
             except queue.Full:
                 pass
             if rec_q is not None:
@@ -319,7 +326,9 @@ class _CamSlot:
             print(f"[capture] memutar {clip_name}  fps={fps:.1f}")
             next_time = time.monotonic()
             while not stop.is_set():
+                _t0 = time.perf_counter()
                 ok, frame = cap.read()
+                decode_ms = (time.perf_counter() - _t0) * 1000
                 if not ok:
                     break
                 if frame_q.full():
@@ -328,9 +337,10 @@ class _CamSlot:
                     except queue.Empty:
                         pass
                 try:
-                    # Tuple (frame, source_clip, local_frame) — dipakai BatchProcessor
-                    # untuk logging prediksi; RTSP mode tetap kirim ndarray polos.
-                    frame_q.put_nowait((frame, clip_name, local_frame))
+                    # (frame, decode_ms, source_clip, local_frame) — source_clip/
+                    # local_frame dipakai BatchProcessor buat logging prediksi;
+                    # RTSP kirim bentuk sama dengan 2 field terakhir None.
+                    frame_q.put_nowait((frame, decode_ms, clip_name, local_frame))
                 except queue.Full:
                     pass
                 local_frame += 1

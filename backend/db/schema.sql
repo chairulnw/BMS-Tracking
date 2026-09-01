@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS detections (
 );
 ALTER TABLE detections ADD COLUMN IF NOT EXISTS track_id      INTEGER;
 ALTER TABLE detections ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;
+-- Instrumentasi latency: `timestamp` = jam AI service (event terjadi),
+-- `created_at` = jam backend insert row ini — selisihnya = network/backend delay.
+ALTER TABLE detections ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
 CREATE INDEX IF NOT EXISTS idx_detections_person_id ON detections (person_id);
 CREATE INDEX IF NOT EXISTS idx_detections_timestamp  ON detections (timestamp DESC);
@@ -186,6 +189,9 @@ CREATE INDEX IF NOT EXISTS idx_camera_events_category  ON camera_events (categor
 -- Alarm ack/unack (plan2/spesifikasi.md Fase 3)
 ALTER TABLE camera_events ADD COLUMN IF NOT EXISTS acknowledged    BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE camera_events ADD COLUMN IF NOT EXISTS acknowledged_at TIMESTAMPTZ;
+-- Instrumentasi latency: `timestamp` = jam AI service (event terjadi),
+-- `created_at` = jam backend insert row ini — selisihnya = network/backend delay.
+ALTER TABLE camera_events ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
 -- ── Tracklets (Fase 2 — asosiasi identitas level-tracklet) ──────────────────
 
@@ -216,6 +222,13 @@ ALTER TABLE tracklets ADD COLUMN IF NOT EXISTS positions JSONB;
 -- Migrasi OSNet (512-dim) -> TransReID (3840-dim, Subbab Analisis Pemilihan
 -- Solusi). Embedding lama tidak bisa dikonversi dimensinya, jadi diset NULL
 -- (galeri identitas dibangun ulang dari nol memakai TransReID).
+-- ivfflat/hnsw pgvector cuma dukung index sampai 2000 dimensi — embedding
+-- TransReID (3840) di atas itu, jadi index lama HARUS didrop dulu sebelum
+-- ALTER, dan TIDAK bisa diganti index sejenis sesudahnya (lihat komentar di
+-- bawah CREATE INDEX person_started). Search similarity jalan pakai exact
+-- scan (cukup di volume data saat ini, lihat ponytail note di bawah).
+DROP INDEX IF EXISTS idx_tracklets_embedding;
+
 DO $$
 BEGIN
     IF EXISTS (
@@ -230,11 +243,11 @@ END $$;
 
 CREATE INDEX IF NOT EXISTS idx_tracklets_person_started
     ON tracklets (person_id, started_at DESC);
-CREATE INDEX IF NOT EXISTS idx_tracklets_embedding
-    ON tracklets USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 100);
--- ponytail: IVFFlat cukup di volume ini (< ~1 juta baris). Naikkan ke HNSW
--- kalau tracklets tumbuh jauh lebih besar dari itu.
+-- ponytail: tanpa index ivfflat/hnsw di embedding (lihat DROP INDEX di atas —
+-- pgvector cap index-nya di 2000 dim, TransReID 3840), similarity search di
+-- /people jalan exact scan. Cukup buat volume sekarang (ratusan-ribuan baris);
+-- kalau tracklets tumbuh jauh lebih besar, opsi: PCA/reduksi dimensi embedding
+-- sebelum index, atau upgrade pgvector versi yang dukung dim lebih tinggi.
 CREATE INDEX IF NOT EXISTS idx_tracklets_attrs
     ON tracklets USING gin (attrs);
 

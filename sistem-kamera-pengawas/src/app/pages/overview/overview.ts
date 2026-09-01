@@ -52,7 +52,8 @@ interface CameraEvent {
   category:     string;
   description:  string | null;
   snapshot_url: string | null;
-  timestamp:    string;
+  timestamp:    string;    // jam AI service (event terjadi)
+  created_at:   string;    // jam backend insert row ini
   acknowledged: boolean;
 }
 
@@ -88,6 +89,10 @@ export class Dashboard implements OnInit {
   filterCamera     = '';
   filterEventType  = '';
   filterCategory   = '';
+
+  // Instrumentasi evaluasi — cuma nyatet delta waktu ke console, gak ada UI
+  // baru. Set id biar tiap event cuma di-log sekali (bukan tiap poll ulang).
+  private _loggedLatencyIds = new Set<number>();
 
   readonly EVENT_TYPES = [
     'person_detected', 'zone_entry', 'camera_offline', 'camera_online',
@@ -194,12 +199,32 @@ export class Dashboard implements OnInit {
       `${API}/camera-events?${params}`
     ).subscribe({
       next: res => {
+        const receivedAt = Date.now();
         this.events      = res.events;
         this.eventsTotal = res.total;
         this.eventsPages = res.pages;
+        this._logLatency(res.events, receivedAt);
       },
       error: () => {},
     });
+  }
+
+  /** Instrumentasi evaluasi (bukan camera-to-dashboard — gak ada timestamp
+   * asli dari kamera). Backend delay = created_at - timestamp (network + insert
+   * backend). End-to-end = jam browser terima response - timestamp (AI). AI
+   * processing latency-nya sendiri ada di ai-service/latency.csv per-frame,
+   * gak bisa dikorelasikan presisi ke satu event di sini (beda granularitas). */
+  private _logLatency(events: CameraEvent[], receivedAt: number): void {
+    for (const ev of events) {
+      if (this._loggedLatencyIds.has(ev.id)) continue;
+      this._loggedLatencyIds.add(ev.id);
+      const aiTs   = new Date(ev.timestamp).getTime();
+      const backTs = new Date(ev.created_at).getTime();
+      console.log(
+        `[latency] event #${ev.id} cam=${ev.camera_id} ` +
+        `backend_delay_ms=${backTs - aiTs} end_to_end_ms=${receivedAt - aiTs}`
+      );
+    }
   }
 
   private _todayISO(): string {

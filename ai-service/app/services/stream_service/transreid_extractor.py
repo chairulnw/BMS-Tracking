@@ -23,9 +23,10 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-_REPO_DIR    = Path(__file__).resolve().parents[3] / "TransReID"
+_AI_SERVICE_DIR = Path(__file__).resolve().parents[3]
+_REPO_DIR    = _AI_SERVICE_DIR / "checkpoints" / "TransReID"   # vendored kode arsitektur (config/model/loss)
 _CONFIG_PATH = _REPO_DIR / "configs" / "Market" / "vit_transreid_stride.yml"
-_CKPT_PATH   = _REPO_DIR / "pretrained" / "vit_transreid_market1501.pth"
+_CKPT_PATH   = _AI_SERVICE_DIR / "checkpoints" / "vit_transreid_market1501.pth"   # bobot, sejajar checkpoint Re-ID lain
 _IMG_SIZE    = (256, 128)   # (H, W) — samain dengan INPUT.SIZE_TEST config
 _MEAN = torch.tensor([0.5, 0.5, 0.5]).view(1, 3, 1, 1)   # PIXEL_MEAN/STD config (bukan ImageNet)
 _STD  = torch.tensor([0.5, 0.5, 0.5]).view(1, 3, 1, 1)

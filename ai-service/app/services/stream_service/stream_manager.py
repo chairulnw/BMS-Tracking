@@ -1,6 +1,5 @@
 """Public API stream; satu instance di app.state."""
 
-import os
 import re
 import threading
 
@@ -37,15 +36,15 @@ class StreamManager:
     def shared_db(self) -> "IdentityDB | None":
         return self._shared_db
 
-    def _get_or_load_models(self, yolo_model: str, reid_model: str):
+    def _get_or_load_models(self, detector_model: str, reid_model: str):
         with self._model_lock:
             if self._models is None:
-                self._models = load_model_bundle(yolo_model, reid_model)
+                self._models = load_model_bundle(detector_model, reid_model)
             return self._models
 
     def start(
         self,
-        yolo_model:     str,
+        detector_model: str,
         reid_model:     str,
         conf_threshold: float,
         reid_threshold: float,
@@ -57,39 +56,27 @@ class StreamManager:
 
         # Loading model (mahal, sekali per proses) dilakukan DI LUAR self._lock —
         # dia gak menyentuh state bersama, jadi status()/route lain gak perlu nunggu.
-        models = self._get_or_load_models(yolo_model, reid_model)
+        models = self._get_or_load_models(detector_model, reid_model)
 
         with self._lock:
             if self._running:
                 raise RuntimeError("Stream sudah berjalan. Panggil /stream/stop dulu.")
 
-            # Prioritas: ambil dari database, fallback ke env
             db_cameras = _fetch_cameras()
-            if db_cameras:
-                cam_configs = [
-                    {
-                        "camera_id":         c.get("camera_id") or _camera_id_from_url(c["rtsp_url"]),
-                        "rtsp_url":          c["rtsp_url"],
-                        "name":              c.get("name", ""),
-                        "analytics_enabled": c.get("analytics_enabled", True),
-                    }
-                    for c in db_cameras
-                ]
-                print(f"[stream] {len(cam_configs)} kamera dari database.")
-            else:
-                urls_raw = os.getenv("RTSP_URLS", "").strip()
-                if not urls_raw:
-                    raise RuntimeError(
-                        "Tidak ada kamera di database dan RTSP_URLS tidak ditemukan di .env"
-                    )
-                urls = [u.strip() for u in urls_raw.split(",") if u.strip()]
-                if not urls:
-                    raise RuntimeError("RTSP_URLS kosong atau tidak valid.")
-                cam_configs = [
-                    {"camera_id": _camera_id_from_url(u), "rtsp_url": u, "name": ""}
-                    for u in urls
-                ]
-                print(f"[stream] {len(cam_configs)} kamera dari .env (fallback).")
+            if not db_cameras:
+                raise RuntimeError(
+                    "Tidak ada kamera aktif di database. Tambahkan lewat /pengaturan."
+                )
+            cam_configs = [
+                {
+                    "camera_id":         c.get("camera_id") or _camera_id_from_url(c["rtsp_url"]),
+                    "rtsp_url":          c["rtsp_url"],
+                    "name":              c.get("name", ""),
+                    "analytics_enabled": c.get("analytics_enabled", True),
+                }
+                for c in db_cameras
+            ]
+            print(f"[stream] {len(cam_configs)} kamera dari database.")
 
             self._stop_event.clear()
             self._slots = [
@@ -207,7 +194,7 @@ class StreamManager:
             count_out        = 0,
             frames_processed = frames,
             identities       = self.get_identities(),
-            rtsp_configured  = bool(self._slots) or bool(os.getenv("RTSP_URLS", "").strip()),
+            rtsp_configured  = bool(self._slots),
         )
 
     def get_batch_metrics(self) -> dict | None:

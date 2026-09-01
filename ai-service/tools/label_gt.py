@@ -7,7 +7,7 @@ salah deteksi. Jalankan langsung (butuh display, nggak bisa headless):
     python label_gt.py
 
 Alur per frame yang ditampilkan (tiap ~SAMPLE_INTERVAL_SEC detik, dihitung
-ulang per klip dari FPS aslinya masing-masing — FPS klip di sample copy/
+ulang per klip dari FPS aslinya masing-masing — FPS klip di sample/
 bervariasi dari 5 sampai 36, jadi step tetap dalam jumlah frame bakal bikin
 densitas label beda-beda antar klip):
     ENTER  -> terima semua box, lanjut diminta person ID satu-satu di terminal
@@ -43,9 +43,9 @@ from pathlib import Path
 import cv2
 from ultralytics import YOLO
 
-GT_DIR    = Path("sample copy")
+GT_DIR    = Path("sample")
 OUT_CSV   = GT_DIR / "output.csv"
-YOLO_PATH = "yolo26n.pt"
+YOLO_PATH = "checkpoints/yolo26n.pt"
 SAMPLE_INTERVAL_SEC = 1.0   # jarak waktu antar frame yang ditampilkan buat dilabel
 CONF      = 0.4   # ambang confidence YOLO — agak longgar, manusia tetap kurasi
 

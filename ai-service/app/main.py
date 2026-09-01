@@ -29,7 +29,7 @@ from app.schemas import DEFAULT_CONF_THRESHOLD, ASSOC_THRESHOLD
 from app.services import retention
 from app.services.stream_service import StreamManager
 
-YOLO_MODEL = os.getenv("YOLO_MODEL", "yolo26n.pt")
+DETECTOR_MODEL = os.getenv("DETECTOR_MODEL", "checkpoints/yolo26n.pt")
 REID_MODEL = os.getenv("REID_MODEL", "osnet_ain_x1_0")
 
 
@@ -43,16 +43,19 @@ async def lifespan(app: FastAPI):
         device = "cpu"
     print(f"[startup] device: {device}")
 
-    app.state.yolo_model = YOLO_MODEL
+    app.state.detector_model = DETECTOR_MODEL
     app.state.reid_model = REID_MODEL
 
-    print(f"[startup] loading YOLO ({YOLO_MODEL})…")
-    app.state.detector = YOLO(YOLO_MODEL)
+    print(f"[startup] loading detector ({DETECTOR_MODEL})…")
+    app.state.detector = YOLO(DETECTOR_MODEL)
 
     print(f"[startup] loading ReID ({REID_MODEL})…")
     if REID_MODEL == "transreid":
         from app.services.stream_service.transreid_extractor import TransReIDExtractor
         app.state.extractor = TransReIDExtractor(device=device)
+    elif REID_MODEL == "bot_resnet50":
+        from app.services.stream_service.bot_resnet50_extractor import BotResNet50Extractor
+        app.state.extractor = BotResNet50Extractor(device=device)
     else:
         _msmt17 = Path.home() / ".cache/torch/checkpoints/osnet_ain_x1_0_msmt17.pt"
         app.state.extractor = torchreid.utils.FeatureExtractor(
@@ -73,7 +76,7 @@ async def lifespan(app: FastAPI):
     else:
         try:
             app.state.stream_manager.start(
-                yolo_model=YOLO_MODEL, reid_model=REID_MODEL,
+                detector_model=DETECTOR_MODEL, reid_model=REID_MODEL,
                 conf_threshold=DEFAULT_CONF_THRESHOLD, reid_threshold=ASSOC_THRESHOLD,
             )
             print("[startup] stream auto-started")

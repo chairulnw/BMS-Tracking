@@ -76,13 +76,13 @@ class _ModelBundle:
     par:          None = None
 
 
-def load_model_bundle(yolo_model: str, reid_model: str) -> _ModelBundle:
+def load_model_bundle(detector_model: str, reid_model: str) -> _ModelBundle:
     if torch.backends.mps.is_available():
-        yolo_device = "mps"
+        detector_device = "mps"
     elif torch.cuda.is_available():
-        yolo_device = "cuda"
+        detector_device = "cuda"
     else:
-        yolo_device = "cpu"
+        detector_device = "cpu"
     # ReID (OSNet) jalan per box terdeteksi, tiap siklus, di semua kamera —
     # jauh lebih sering dipanggil daripada YOLO per-frame. Sebelumnya cuma
     # cek cuda, jadi selalu jatuh ke CPU di Mac walau MPS ada — kemungkinan
@@ -96,12 +96,12 @@ def load_model_bundle(yolo_model: str, reid_model: str) -> _ModelBundle:
         reid_device = "cpu"
 
     # RTDETR pakai kelas ultralytics beda dari YOLO — dipilih dari nama file
-    # weight-nya (mis. "rtdetr-l.pt"), biar YOLO_MODEL tetap satu env var saja.
-    detector_cls = RTDETR if "rtdetr" in yolo_model.lower() else YOLO
-    print(f"[batch] loading {detector_cls.__name__}({yolo_model}) → {yolo_device}, "
+    # weight-nya (mis. "rtdetr-l.pt"), biar DETECTOR_MODEL tetap satu env var saja.
+    detector_cls = RTDETR if "rtdetr" in detector_model.lower() else YOLO
+    print(f"[batch] loading {detector_cls.__name__}({detector_model}) → {detector_device}, "
           f"ReID({reid_model}) → {reid_device}")
-    detector = detector_cls(yolo_model)
-    detector.to(yolo_device)
+    detector = detector_cls(detector_model)
+    detector.to(detector_device)
     # ponytail: pemetaan model_name -> checkpoint lokal masih manual satu-satu.
     # Kalau nambah model Re-ID baru, tambahkan baris di sini.
     _reid_checkpoints = {
@@ -111,6 +111,9 @@ def load_model_bundle(yolo_model: str, reid_model: str) -> _ModelBundle:
     if reid_model == "transreid":
         from app.services.stream_service.transreid_extractor import TransReIDExtractor
         extractor = TransReIDExtractor(device=reid_device)
+    elif reid_model == "bot_resnet50":
+        from app.services.stream_service.bot_resnet50_extractor import BotResNet50Extractor
+        extractor = BotResNet50Extractor(device=reid_device)
     else:
         _ckpt_name = _reid_checkpoints.get(reid_model)
         _ckpt_path = Path.home() / ".cache/torch/checkpoints" / _ckpt_name if _ckpt_name else None
@@ -130,7 +133,7 @@ def load_model_bundle(yolo_model: str, reid_model: str) -> _ModelBundle:
     # crop terbaik (lihat _resolve_tracklet di pipeline_service.py), bukan per
     # frame: ~2s/crop di CPU, per-frame akan melumpuhkan batch loop.
     par = None
-    rap1_checkpoint = Path("par_checkpoints/RAP1.pth")
+    rap1_checkpoint = Path("checkpoints/par_checkpoints/RAP1.pth")
     if rap1_checkpoint.exists():
         from app.par.par_service import PARExtractor
         try:
@@ -176,9 +179,19 @@ class BatchProcessor:
         # System Health (plan2/spesifikasi.md Fase 2) — waktu predict() batch
         # terakhir, buat tahu kapan BatchProcessor mulai jadi bottleneck.
         self._batch_ms: "deque[float]" = deque(maxlen=50)
+        self._frame_idx: dict[str, int] = {}   # diisi _loop(), dibaca resource_sampler buat fps_effective
 
         from app.services.stream_service.clip_recorder import _PredictionLogger
         self._pred_logger = _PredictionLogger(PREDICTIONS_CSV)
+
+        from app.services.stream_service.latency_logger import _LatencyLogger
+        self._latency_logger = _LatencyLogger()
+
+        from app.services.stream_service.resource_sampler import ResourceSampler
+        self._resource_sampler = ResourceSampler(
+            get_total_frames=lambda: sum(self._frame_idx.values()),
+            stop_event=stop_event,
+        )
 
         self._detector      = models.detector
         self._extractor     = models.extractor
@@ -191,6 +204,7 @@ class BatchProcessor:
             target=self._loop, daemon=True, name="batch-infer"
         )
         self._thread.start()
+        self._resource_sampler.start()
 
     def join(self, timeout: float = 15.0) -> None:
         if self._thread and self._thread.is_alive():
@@ -215,7 +229,7 @@ class BatchProcessor:
         # Track hanya slot playlist yang berhasil connect
         self._file_slots_total = {s.camera_id for s in self._slots if s._playlist and s.online}
 
-        frame_idx    = {s.camera_id: 0 for s in self._slots}
+        frame_idx    = self._frame_idx = {s.camera_id: 0 for s in self._slots}
         current_date = datetime.now().date()
 
         try:
@@ -281,12 +295,9 @@ class BatchProcessor:
                         has_new.append(False)
                         continue
 
-                    if isinstance(frame, tuple):
-                        # Mode file-playback: (frame, source_clip, local_frame)
-                        frame, slot.last_source_clip, slot.last_local_frame = frame
-                    else:
-                        slot.last_source_clip = None
-                        slot.last_local_frame = None
+                    # item selalu (frame, decode_ms, source_clip, local_frame) —
+                    # 2 field terakhir None buat RTSP (lihat cam_slot.py).
+                    frame, slot.last_decode_ms, slot.last_source_clip, slot.last_local_frame = frame
 
                     slot.last_frame = frame
                     batch_frames.append(frame)
@@ -313,7 +324,8 @@ class BatchProcessor:
                     classes=[0],
                     verbose=False,
                 )
-                self._batch_ms.append((time.perf_counter() - _batch_t0) * 1000)
+                detection_ms = (time.perf_counter() - _batch_t0) * 1000
+                self._batch_ms.append(detection_ms)
                 results: list = [None] * len(self._slots)
                 for i, r in zip(active_idx, active_results):
                     results[i] = r
@@ -335,16 +347,24 @@ class BatchProcessor:
                     # Per-camera BYTETracker update → track ID per kamera
                     # (skip kalau analytics dimatikan untuk kamera ini — capture &
                     # rekaman tetap jalan, cuma deteksi/tracking/event yang dilewati)
+                    # Instrumentasi evaluasi (lihat latency_logger.py) — cuma
+                    # nyatet waktu, gak ngubah urutan/hasil logika di bawah.
+                    tracking_ms = 0.0
+                    reid_ms     = 0.0
                     per_box: list[tuple[int, float, int, int, int, int, "np.ndarray | None", float]] = []
                     if slot.analytics_enabled and boxes is not None and slot.tracker is not None and n_raw > 0:
-                        det    = boxes.cpu().numpy()
+                        det = boxes.cpu().numpy()
+                        _track_t0 = time.perf_counter()
                         tracks = slot.tracker.update(det, frame)
+                        tracking_ms = (time.perf_counter() - _track_t0) * 1000
                         for t in tracks:
                             x1, y1, x2, y2 = int(t[0]), int(t[1]), int(t[2]), int(t[3])
                             track_id = int(t[4])
                             conf_val = float(t[5])
+                            _reid_t0 = time.perf_counter()
                             result   = _extract_embedding(self._extractor, frame, x1, y1, x2, y2,
                                                           track_id=track_id, cam_id=slot.camera_id)
+                            reid_ms += (time.perf_counter() - _reid_t0) * 1000
                             emb, quality = result if result is not None else (None, 0.0)
                             per_box.append((track_id, conf_val, x1, y1, x2, y2, emb, quality))
 
@@ -353,12 +373,17 @@ class BatchProcessor:
 
                     # Kumpulkan bukti untuk tiap tracklet — keputusan identitas
                     # baru diambil saat tracklet DITUTUP (lihat pipeline_service.py).
+                    # matching_ms nyaris 0 kecuali siklus ini nutup tracklet
+                    # (cosine-similarity asosiasi cuma jalan di close_expired->
+                    # _resolve_tracklet->associate(), bukan tiap frame — itu normal).
+                    _match_t0 = time.perf_counter()
                     for track_id, conf_val, x1, y1, x2, y2, emb, quality in per_box:
                         slot.db.observe(slot.camera_id, track_id, emb, quality, conf_val,
                                         frame, x1, y1, x2, y2, ts_now)
 
                     slot.db.update_active(slot.camera_id, active_tids)
                     closed = slot.db.close_expired(slot.camera_id, ts_now)
+                    matching_ms = (time.perf_counter() - _match_t0) * 1000
                     if closed:
                         self._finalize_tracklets(closed)
 
@@ -454,6 +479,17 @@ class BatchProcessor:
                     idx = frame_idx[slot.camera_id] + 1
                     frame_idx[slot.camera_id] = idx
 
+                    self._latency_logger.log(
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        camera_id=slot.camera_id,
+                        frame_id=idx,
+                        decode_ms=slot.last_decode_ms,
+                        detection_ms=detection_ms,
+                        tracking_ms=tracking_ms,
+                        reid_ms=reid_ms,
+                        matching_ms=matching_ms,
+                    )
+
                     if idx % 30 == 0:
                         h, w = frame.shape[:2]
                         tids  = [f"t{tid}({slot.db.name_of(tid, slot.camera_id) or '?'})" for tid, *_ in per_box]
@@ -476,6 +512,7 @@ class BatchProcessor:
             for slot in self._slots:
                 slot.shutdown()
             self._pred_logger.close()
+            self._latency_logger.close()
 
     def get_metrics(self) -> dict:
         """System Health (plan2/spesifikasi.md Fase 2) — waktu predict() batch
