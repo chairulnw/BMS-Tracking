@@ -8,14 +8,16 @@ CPU/RAM reuse psutil call yang sama persis dipakai `/health`
 
 import csv
 import threading
-import time
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import psutil
 import torch
 
 RESOURCE_CSV = Path("resources.csv")
 SAMPLE_INTERVAL_SEC = 2.0
+_WIB = ZoneInfo("Asia/Jakarta")   # cuma buat timestamp CSV ini, gampang dibaca manual
 
 _HEADER = ["timestamp", "cpu_percent", "ram_percent", "cpu_peak", "ram_peak",
            "fps_effective", "gpu_util", "vram_mb"]
@@ -57,7 +59,7 @@ class ResourceSampler:
                 gpu_util, vram_mb = self._gpu_metrics()
 
                 writer.writerow([
-                    time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    datetime.now(_WIB).isoformat(),
                     f"{cpu:.1f}", f"{ram:.1f}", f"{self._cpu_peak:.1f}", f"{self._ram_peak:.1f}",
                     f"{fps:.2f}", gpu_util if gpu_util is not None else "",
                     vram_mb if vram_mb is not None else "",

@@ -145,7 +145,20 @@ class _BackendClient:
         description:  str | None = None,
         snapshot_url: str | None = None,
         person_label: str | None = None,
+        timestamp:    "object" = None,
+        ai_latency_ms: float | None = None,
     ) -> None:
+        """`timestamp` HARUS jam kejadiannya beneran (mis. `ended_at` tracklet,
+        atau jam crossing terdeteksi) — bukan jam POST ini dieksekusi, sama
+        alasannya kayak `post_detection()`. Kalau None, backend fallback ke
+        jam dia sendiri terima request (instrumentasi latency AI→backend jadi
+        gak valid buat event ini — lihat CameraEventCreate.timestamp).
+
+        `ai_latency_ms` = total_ai_ms frame TERAKHIR kamera ini saat event
+        di-generate (lihat BatchProcessor._last_ai_ms) — approx kasar, BUKAN
+        rata-rata seluruh tracklet (beda granularitas per-frame vs per-event,
+        lihat komentar di batch_processor.py)."""
+        ts = timestamp if timestamp is not None else datetime.now(timezone.utc)
         def _do() -> None:
             try:
                 requests.post(
@@ -157,6 +170,8 @@ class _BackendClient:
                         "description":  description,
                         "snapshot_url": snapshot_url,
                         "person_label": person_label,
+                        "timestamp":    ts.astimezone(timezone.utc).isoformat(),
+                        "ai_latency_ms": ai_latency_ms,
                     },
                     headers=_auth_headers(),
                     timeout=0.8,

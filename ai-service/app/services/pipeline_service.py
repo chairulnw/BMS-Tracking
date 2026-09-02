@@ -34,6 +34,7 @@ BUFFER_FRAMES      = 10
 NEAR_LINE_DIST     = 40
 MIN_CROP_PX        = 32
 MIN_MARGIN         = 0.05   # gap minimum top1-top2 untuk confident match
+STRONG_MATCH       = 0.84   # skor top1 >= ini: langsung match, lewati gate margin
 MAX_BANK_SIZE      = 5      # maks entry per identitas di bank embedding
 BANK_MERGE_SIM     = 0.90   # sim >= ini → update entry lama, bukan tambah baru
 BANK_STALE_HOURS   = 6.0    # entry yang tidak jadi top-match selama N jam → kandidat pruning
@@ -81,10 +82,6 @@ class Tracklet:
     best_y:     "int | None"              = None
     positions:  list                      = field(default_factory=list)  # [(x,y), ...] tiap observe(), urut waktu
     missing:    int                       = 0   # siklus batch berturut-turut tanpa track ini
-
-
-def _overlaps(a: tuple[datetime, datetime], b: tuple[datetime, datetime]) -> bool:
-    return a[0] < b[1] and b[0] < a[1]
 
 
 def par_attrs(par, crop: "np.ndarray | None") -> "dict | None":
@@ -144,13 +141,6 @@ class IdentityDB:
         self._track_to_name:   dict[tuple[str, int], str]       = {}
         self._name_to_owner:   dict[str, tuple[str, int]]       = {}  # dipakai to_records()/identities saja
         self._active_tracks:   dict[str, set[int]]              = {}
-        self._last_interval:   dict[str, tuple[datetime, datetime]] = {}
-        # Mode file-playlist (evaluasi/testing): beberapa kamera memutar klip
-        # yang overlap waktu secara sengaja (simulasi), bukan indikasi orang
-        # beneran ada di 2 tempat. Hard constraint interval-overlap di
-        # associate() DIMATIKAN kalau flag ini true — hanya dipakai di sini,
-        # RTSP live tetap dapat constraint-nya (lihat StreamManager.start()).
-        self.skip_interval_guard: bool                          = False
 
         self._open: dict[tuple[str, int], Tracklet] = {}
 
@@ -256,17 +246,14 @@ class IdentityDB:
 
     def associate(self, emb: np.ndarray, tl: Tracklet) -> tuple["str | None", float]:
         """score = cosine similarity murni terhadap bank embedding tiap orang.
-        Constraint keras: dua tracklet yang interval waktunya beririsan tidak
-        pernah dianggap orang yang sama (menggantikan collision guard lama) —
-        kecuali `skip_interval_guard` true (mode file-playlist, lihat
-        StreamManager.start())."""
-        interval = (tl.started_at, tl.last_seen)
+        ponytail: hard constraint interval-overlap (dua tracklet beririsan
+        waktu di kamera sama tidak pernah dianggap orang yang sama) dicabut
+        atas permintaan eksplisit — sekarang murni threshold+margin di bawah,
+        gak ada guard lain. Konsekuensi yang sudah didiskusikan: dua orang
+        beda yang crossing berdekatan bisa ke-gabung jadi satu identitas."""
         best_name, best_score = None, -1.0
         second_score = -1.0
         for name, bank in self._embeddings.items():
-            other = self._last_interval.get(name)
-            if other is not None and _overlaps(interval, other) and not self.skip_interval_guard:
-                continue
             score = max(float(np.dot(emb, e["emb"])) for e in bank)
             if _debug_reid():
                 print(f"[assoc.cmp] {tl.cam_id}/t{tl.track_id} vs {name!r}: cos={score:.3f}")
@@ -277,7 +264,9 @@ class IdentityDB:
                 second_score = score
 
         margin = best_score - second_score
-        if best_name is not None and best_score >= self.threshold and margin >= MIN_MARGIN:
+        if best_name is not None and best_score >= self.threshold and (
+            best_score >= STRONG_MATCH or margin >= MIN_MARGIN
+        ):
             return best_name, best_score
         return None, best_score
 
@@ -301,13 +290,12 @@ class IdentityDB:
         key = self._key(tl.track_id, tl.cam_id)
         self._track_to_name[key]  = name
         self._name_to_owner[name] = key
-        self._last_interval[name] = (tl.started_at, tl.last_seen)
 
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         # score >= threshold tapi tetap NEW berarti ditolak gate margin (MIN_MARGIN),
         # bukan skor kurang — dua kandidat teratas terlalu dekat untuk dipercaya.
         if is_new and score >= self.threshold:
-            reason = f"score={score:.3f} >= thr, tapi margin top1/top2 < {MIN_MARGIN}"
+            reason = f"score={score:.3f} >= thr (<{STRONG_MATCH}), margin top1/top2 < {MIN_MARGIN}"
         elif is_new:
             reason = f"score={score:.3f} < thr={self.threshold} (atau gallery kosong)"
         else:
@@ -383,10 +371,6 @@ class IdentityDB:
             ended_at = e["ended_at"]
             bank.append({"emb": emb_arr, "last_match": ended_at, "cam_id": e["camera_id"]})
 
-            prev = self._last_interval.get(display)
-            if prev is None or ended_at > prev[1]:
-                self._last_interval[display] = (e["started_at"], ended_at)
-
         self._count = max(self._count, max_count)
 
     # ── Lookup / maintenance ─────────────────────────────────────────────────
@@ -426,7 +410,6 @@ class IdentityDB:
         self._display_to_label.clear()
         self._name_to_owner.clear()
         self._active_tracks.clear()
-        self._last_interval.clear()
         self._count = 0
 
     def to_records(self) -> list[IdentityRecord]:

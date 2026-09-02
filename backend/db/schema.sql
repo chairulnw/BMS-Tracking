@@ -192,6 +192,9 @@ ALTER TABLE camera_events ADD COLUMN IF NOT EXISTS acknowledged_at TIMESTAMPTZ;
 -- Instrumentasi latency: `timestamp` = jam AI service (event terjadi),
 -- `created_at` = jam backend insert row ini — selisihnya = network/backend delay.
 ALTER TABLE camera_events ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+-- total_ai_ms frame terakhir kamera ini saat event digenerate — approx kasar
+-- (per-frame, bukan rata-rata seluruh tracklet), lihat backend_client.py.
+ALTER TABLE camera_events ADD COLUMN IF NOT EXISTS ai_latency_ms REAL;
 
 -- ── Tracklets (Fase 2 — asosiasi identitas level-tracklet) ──────────────────
 

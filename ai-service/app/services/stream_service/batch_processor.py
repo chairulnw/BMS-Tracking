@@ -10,6 +10,7 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import cv2
 import numpy as np
@@ -28,6 +29,10 @@ from app.services.stream_service.backend_client import _BackendClient, _fetch_zo
 from app.services.stream_service.cam_slot import _CamSlot
 
 CROSSING_COOLDOWN = 3.0   # detik minimum antar event crossing per (garis/polygon, track)
+# Cuma buat timestamp latency.csv (biar gampang dibaca manual, single-location
+# Jakarta) — timestamp event ke backend/DB TETAP UTC (timezone.utc di tempat
+# lain file ini), jangan ikut diganti.
+_WIB = ZoneInfo("Asia/Jakarta")
 THUMBNAILS_DIR    = Path("thumbnails")
 PREDICTIONS_CSV   = Path("predictions.csv")  # log prediksi mode file-playback, utk dibanding ground truth
 
@@ -127,6 +132,14 @@ def load_model_bundle(detector_model: str, reid_model: str) -> _ModelBundle:
     tracker_args = None
     if tracker_yaml is not None:
         tracker_cfg  = YAML.load(check_yaml(tracker_yaml))
+        # ponytail: default track_buffer=30 frame kadang bikin tracklet baru
+        # (identity split) tiap orang sempat ke-occlude sebentar (lewat
+        # pilar/tumpang tindih sama orang lain) — tracker keburu nyerah dan
+        # kasih track_id baru sebelum orangnya kelihatan lagi. Dinaikkan biar
+        # lebih toleran; naikkan lagi kalau masih sering split di kasus
+        # occlusion-di-belakang-objek (bukan dua-orang-crossing, itu limitasi
+        # IoU tracker terpisah, gak kebantu parameter ini).
+        tracker_cfg["track_buffer"] = 60
         tracker_args = IterableSimpleNamespace(**tracker_cfg)
 
     # PAR (atribut penampilan, Fase 3) — dijalankan sekali per tracklet pada
@@ -180,6 +193,14 @@ class BatchProcessor:
         # terakhir, buat tahu kapan BatchProcessor mulai jadi bottleneck.
         self._batch_ms: "deque[float]" = deque(maxlen=50)
         self._frame_idx: dict[str, int] = {}   # diisi _loop(), dibaca resource_sampler buat fps_effective
+        # total_ai_ms frame TERAKHIR per kamera — approx kasar buat ditempel ke
+        # payload camera_events (ai_latency_ms), BUKAN rata-rata seluruh
+        # tracklet (itu butuh lebih banyak bookkeeping, lihat diskusi latency).
+        self._last_ai_ms: dict[str, float] = {}
+        # Toggle instrumentasi latency/resource — default nyala (evaluasi
+        # kombinasi maupun produksi biasa sama-sama kepake), matiin cuma kalau
+        # emang nggak mau overhead nulis CSV terus-terusan.
+        self._latency_enabled = os.getenv("ENABLE_LATENCY_LOG", "1").lower() not in ("0", "false", "no")
 
         from app.services.stream_service.clip_recorder import _PredictionLogger
         self._pred_logger = _PredictionLogger(PREDICTIONS_CSV)
@@ -204,7 +225,8 @@ class BatchProcessor:
             target=self._loop, daemon=True, name="batch-infer"
         )
         self._thread.start()
-        self._resource_sampler.start()
+        if self._latency_enabled:
+            self._resource_sampler.start()
 
     def join(self, timeout: float = 15.0) -> None:
         if self._thread and self._thread.is_alive():
@@ -438,6 +460,8 @@ class BatchProcessor:
                                             description=f"{direction} via {zone['name']}",
                                             snapshot_url=snap_url,
                                             person_label=person_label,
+                                            timestamp=datetime.fromtimestamp(now, tz=timezone.utc),
+                                            ai_latency_ms=self._last_ai_ms.get(slot.camera_id),
                                         )
 
                         elif zone["type"] == "polygon":
@@ -479,16 +503,20 @@ class BatchProcessor:
                     idx = frame_idx[slot.camera_id] + 1
                     frame_idx[slot.camera_id] = idx
 
-                    self._latency_logger.log(
-                        timestamp=datetime.now(timezone.utc).isoformat(),
-                        camera_id=slot.camera_id,
-                        frame_id=idx,
-                        decode_ms=slot.last_decode_ms,
-                        detection_ms=detection_ms,
-                        tracking_ms=tracking_ms,
-                        reid_ms=reid_ms,
-                        matching_ms=matching_ms,
+                    self._last_ai_ms[slot.camera_id] = (
+                        slot.last_decode_ms + detection_ms + tracking_ms + reid_ms + matching_ms
                     )
+                    if self._latency_enabled:
+                        self._latency_logger.log(
+                            timestamp=datetime.now(_WIB).isoformat(),
+                            camera_id=slot.camera_id,
+                            frame_id=idx,
+                            decode_ms=slot.last_decode_ms,
+                            detection_ms=detection_ms,
+                            tracking_ms=tracking_ms,
+                            reid_ms=reid_ms,
+                            matching_ms=matching_ms,
+                        )
 
                     if idx % 30 == 0:
                         h, w = frame.shape[:2]
@@ -557,6 +585,8 @@ class BatchProcessor:
                     _BackendClient.post_camera_event(
                         cam, "person_detected", "info",
                         person_label=label, snapshot_url=det_url,
+                        timestamp=result["ended_at"],
+                        ai_latency_ms=self._last_ai_ms.get(cam),
                     )
             # Tulis baris predictions.csv yang di-buffer selama tracklet ini
             # terbuka, sekarang dengan nama akhir yang sudah resolve (§6).

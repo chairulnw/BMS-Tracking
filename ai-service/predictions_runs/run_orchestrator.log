@@ -1,0 +1,137 @@
+
+======================================================================
+#1: YOLO26n + ByteTrack + OSNet
+======================================================================
+  -> {'cakupan': '190/259', 'identitas': '12/11', 'false_merge': '1', 'false_split': '2', 'akurasi': '7/11 (63.6%)', 'precision': '0.944', 'recall': '0.961', 'f1': '0.953', 'fps': '7.56', 'cpu_peak': '31%', 'ram_peak': '81%', 'decode_ms': '7.1', 'detection_ms': '24.8', 'tracking_ms': '0.4', 'reid_ms': '14.2', 'matching_ms': '0.0', 'total_ai_ms': '46.6', 'status': 'Selesai'}
+
+======================================================================
+#2: YOLO26n + ByteTrack + TransReID (ViT-B/16*)
+======================================================================
+  -> {'cakupan': '187/259', 'identitas': '16/11', 'false_merge': '1', 'false_split': '4', 'akurasi': '7/11 (63.6%)', 'precision': '0.997', 'recall': '0.931', 'f1': '0.962', 'fps': '7.57', 'cpu_peak': '36%', 'ram_peak': '81%', 'decode_ms': '8.0', 'detection_ms': '23.3', 'tracking_ms': '0.4', 'reid_ms': '29.0', 'matching_ms': '0.0', 'total_ai_ms': '60.8', 'status': 'Selesai'}
+
+======================================================================
+#3: YOLO26n + ByteTrack + BoT (ResNet50)
+======================================================================
+  -> {'cakupan': '190/259', 'identitas': '20/11', 'false_merge': '4', 'false_split': '9', 'akurasi': '1/11 (9.1%)', 'precision': '0.711', 'recall': '0.607', 'f1': '0.655', 'fps': '7.68', 'cpu_peak': '34%', 'ram_peak': '82%', 'decode_ms': '8.3', 'detection_ms': '26.2', 'tracking_ms': '0.5', 'reid_ms': '14.7', 'matching_ms': '0.0', 'total_ai_ms': '49.7', 'status': 'Selesai'}
+
+======================================================================
+#4: YOLO26n + BoT-SORT + OSNet
+======================================================================
+  -> {'cakupan': '191/259', 'identitas': '13/11', 'false_merge': '4', 'false_split': '5', 'akurasi': '5/11 (45.5%)', 'precision': '0.927', 'recall': '0.879', 'f1': '0.903', 'fps': '7.66', 'cpu_peak': '53%', 'ram_peak': '83%', 'decode_ms': '7.5', 'detection_ms': '25.5', 'tracking_ms': '10.6', 'reid_ms': '14.9', 'matching_ms': '0.0', 'total_ai_ms': '58.6', 'status': 'Selesai'}
+
+======================================================================
+#5: YOLO26n + BoT-SORT + TransReID (ViT-B/16*)
+======================================================================
+  -> {'cakupan': '187/259', 'identitas': '16/11', 'false_merge': '4', 'false_split': '6', 'akurasi': '4/11 (36.4%)', 'precision': '0.945', 'recall': '0.853', 'f1': '0.896', 'fps': '7.50', 'cpu_peak': '68%', 'ram_peak': '87%', 'decode_ms': '10.3', 'detection_ms': '28.1', 'tracking_ms': '13.6', 'reid_ms': '33.6', 'matching_ms': '0.1', 'total_ai_ms': '85.7', 'status': 'Selesai'}
+
+======================================================================
+#6: YOLO26n + BoT-SORT + BoT (ResNet50)
+======================================================================
+  -> {'cakupan': '187/259', 'identitas': '18/11', 'false_merge': '6', 'false_split': '10', 'akurasi': '1/11 (9.1%)', 'precision': '0.723', 'recall': '0.599', 'f1': '0.655', 'fps': '7.62', 'cpu_peak': '79%', 'ram_peak': '86%', 'decode_ms': '9.9', 'detection_ms': '30.9', 'tracking_ms': '13.1', 'reid_ms': '16.6', 'matching_ms': '0.1', 'total_ai_ms': '70.6', 'status': 'Selesai'}
+
+======================================================================
+#7: YOLO26n + OC-SORT + OSNet
+======================================================================
+  -> {'cakupan': '181/259', 'identitas': '15/11', 'false_merge': '3', 'false_split': '5', 'akurasi': '4/11 (36.4%)', 'precision': '0.934', 'recall': '0.807', 'f1': '0.866', 'fps': '7.33', 'cpu_peak': '82%', 'ram_peak': '86%', 'decode_ms': '9.5', 'detection_ms': '29.7', 'tracking_ms': '2.3', 'reid_ms': '18.4', 'matching_ms': '0.0', 'total_ai_ms': '60.0', 'status': 'Selesai'}
+
+======================================================================
+#8: YOLO26n + OC-SORT + TransReID (ViT-B/16*)
+======================================================================
+  -> {'cakupan': '174/259', 'identitas': '17/11', 'false_merge': '2', 'false_split': '6', 'akurasi': '4/11 (36.4%)', 'precision': '0.959', 'recall': '0.916', 'f1': '0.937', 'fps': '7.39', 'cpu_peak': '51%', 'ram_peak': '85%', 'decode_ms': '10.3', 'detection_ms': '29.6', 'tracking_ms': '1.4', 'reid_ms': '32.9', 'matching_ms': '0.0', 'total_ai_ms': '74.2', 'status': 'Selesai'}
+
+======================================================================
+#9: YOLO26n + OC-SORT + BoT (ResNet50)
+======================================================================
+  -> {'cakupan': '182/259', 'identitas': '18/11', 'false_merge': '4', 'false_split': '10', 'akurasi': '1/11 (9.1%)', 'precision': '0.647', 'recall': '0.604', 'f1': '0.625', 'fps': '7.56', 'cpu_peak': '68%', 'ram_peak': '86%', 'decode_ms': '9.2', 'detection_ms': '27.9', 'tracking_ms': '1.2', 'reid_ms': '15.2', 'matching_ms': '0.0', 'total_ai_ms': '53.6', 'status': 'Selesai'}
+
+======================================================================
+#10: YOLO11n + ByteTrack + OSNet
+======================================================================
+  -> {'cakupan': '193/259', 'identitas': '12/11', 'false_merge': '4', 'false_split': '8', 'akurasi': '1/11 (9.1%)', 'precision': '0.475', 'recall': '0.730', 'f1': '0.575', 'fps': '7.48', 'cpu_peak': '74%', 'ram_peak': '86%', 'decode_ms': '8.8', 'detection_ms': '30.7', 'tracking_ms': '0.5', 'reid_ms': '17.1', 'matching_ms': '0.1', 'total_ai_ms': '57.3', 'status': 'Selesai'}
+
+======================================================================
+#11: YOLO11n + ByteTrack + TransReID (ViT-B/16*)
+======================================================================
+  -> {'cakupan': '189/259', 'identitas': '14/11', 'false_merge': '3', 'false_split': '7', 'akurasi': '3/11 (27.3%)', 'precision': '0.763', 'recall': '0.745', 'f1': '0.754', 'fps': '7.45', 'cpu_peak': '55%', 'ram_peak': '86%', 'decode_ms': '10.2', 'detection_ms': '28.5', 'tracking_ms': '0.6', 'reid_ms': '31.6', 'matching_ms': '0.1', 'total_ai_ms': '71.0', 'status': 'Selesai'}
+
+======================================================================
+#12: YOLO11n + ByteTrack + BoT (ResNet50)
+======================================================================
+  -> {'cakupan': '194/259', 'identitas': '19/11', 'false_merge': '4', 'false_split': '10', 'akurasi': '1/11 (9.1%)', 'precision': '0.591', 'recall': '0.452', 'f1': '0.512', 'fps': '7.61', 'cpu_peak': '48%', 'ram_peak': '86%', 'decode_ms': '9.8', 'detection_ms': '30.0', 'tracking_ms': '0.6', 'reid_ms': '15.3', 'matching_ms': '0.0', 'total_ai_ms': '55.7', 'status': 'Selesai'}
+
+======================================================================
+#13: YOLO11n + BoT-SORT + OSNet
+======================================================================
+  -> {'cakupan': '195/259', 'identitas': '13/11', 'false_merge': '4', 'false_split': '8', 'akurasi': '3/11 (27.3%)', 'precision': '0.733', 'recall': '0.632', 'f1': '0.679', 'fps': '7.61', 'cpu_peak': '57%', 'ram_peak': '85%', 'decode_ms': '7.7', 'detection_ms': '27.6', 'tracking_ms': '10.7', 'reid_ms': '13.9', 'matching_ms': '0.0', 'total_ai_ms': '59.9', 'status': 'Selesai'}
+
+======================================================================
+#14: YOLO11n + BoT-SORT + TransReID (ViT-B/16*)
+======================================================================
+  -> {'cakupan': '194/259', 'identitas': '14/11', 'false_merge': '4', 'false_split': '7', 'akurasi': '3/11 (27.3%)', 'precision': '0.753', 'recall': '0.732', 'f1': '0.742', 'fps': '7.81', 'cpu_peak': '33%', 'ram_peak': '83%', 'decode_ms': '6.9', 'detection_ms': '21.8', 'tracking_ms': '9.1', 'reid_ms': '23.6', 'matching_ms': '0.0', 'total_ai_ms': '61.4', 'status': 'Selesai'}
+
+======================================================================
+#15: YOLO11n + BoT-SORT + BoT (ResNet50)
+======================================================================
+  -> {'cakupan': '194/259', 'identitas': '15/11', 'false_merge': '4', 'false_split': '10', 'akurasi': '1/11 (9.1%)', 'precision': '0.380', 'recall': '0.487', 'f1': '0.427', 'fps': '7.84', 'cpu_peak': '23%', 'ram_peak': '81%', 'decode_ms': '6.8', 'detection_ms': '26.0', 'tracking_ms': '9.1', 'reid_ms': '13.7', 'matching_ms': '0.0', 'total_ai_ms': '55.7', 'status': 'Selesai'}
+
+======================================================================
+#16: YOLO11n + OC-SORT + OSNet
+======================================================================
+  -> {'cakupan': '186/259', 'identitas': '15/11', 'false_merge': '4', 'false_split': '7', 'akurasi': '3/11 (27.3%)', 'precision': '0.934', 'recall': '0.814', 'f1': '0.870', 'fps': '7.84', 'cpu_peak': '47%', 'ram_peak': '81%', 'decode_ms': '7.0', 'detection_ms': '27.5', 'tracking_ms': '0.7', 'reid_ms': '12.7', 'matching_ms': '0.0', 'total_ai_ms': '47.9', 'status': 'Selesai'}
+
+======================================================================
+#17: YOLO11n + OC-SORT + TransReID (ViT-B/16*)
+======================================================================
+  -> {'cakupan': '186/259', 'identitas': '16/11', 'false_merge': '3', 'false_split': '5', 'akurasi': '5/11 (45.5%)', 'precision': '0.947', 'recall': '0.932', 'f1': '0.939', 'fps': '7.81', 'cpu_peak': '56%', 'ram_peak': '82%', 'decode_ms': '7.7', 'detection_ms': '23.9', 'tracking_ms': '0.8', 'reid_ms': '22.5', 'matching_ms': '0.0', 'total_ai_ms': '54.8', 'status': 'Selesai'}
+
+======================================================================
+#18: YOLO11n + OC-SORT + BoT (ResNet50)
+======================================================================
+  -> {'cakupan': '186/259', 'identitas': '17/11', 'false_merge': '4', 'false_split': '10', 'akurasi': '1/11 (9.1%)', 'precision': '0.568', 'recall': '0.602', 'f1': '0.584', 'fps': '7.85', 'cpu_peak': '36%', 'ram_peak': '80%', 'decode_ms': '7.5', 'detection_ms': '27.1', 'tracking_ms': '0.8', 'reid_ms': '13.7', 'matching_ms': '0.0', 'total_ai_ms': '49.1', 'status': 'Selesai'}
+
+======================================================================
+#19: RTDETRv2-s + ByteTrack + OSNet
+======================================================================
+  -> {'cakupan': '230/259', 'identitas': '14/11', 'false_merge': '3', 'false_split': '4', 'akurasi': '3/11 (27.3%)', 'precision': '0.925', 'recall': '0.836', 'f1': '0.878', 'fps': '7.85', 'cpu_peak': '53%', 'ram_peak': '86%', 'decode_ms': '6.3', 'detection_ms': '98.7', 'tracking_ms': '0.4', 'reid_ms': '13.3', 'matching_ms': '0.0', 'total_ai_ms': '118.7', 'status': 'Selesai'}
+
+======================================================================
+#20: RTDETRv2-s + ByteTrack + TransReID (ViT-B/16*)
+======================================================================
+  -> {'cakupan': '230/259', 'identitas': '16/11', 'false_merge': '4', 'false_split': '7', 'akurasi': '3/11 (27.3%)', 'precision': '0.940', 'recall': '0.876', 'f1': '0.907', 'fps': '7.81', 'cpu_peak': '32%', 'ram_peak': '86%', 'decode_ms': '7.2', 'detection_ms': '110.3', 'tracking_ms': '0.5', 'reid_ms': '22.1', 'matching_ms': '0.0', 'total_ai_ms': '140.1', 'status': 'Selesai'}
+
+======================================================================
+#21: RTDETRv2-s + ByteTrack + BoT (ResNet50)
+======================================================================
+  -> {'cakupan': '230/259', 'identitas': '25/11', 'false_merge': '4', 'false_split': '11', 'akurasi': '0/11 (0.0%)', 'precision': '0.940', 'recall': '0.550', 'f1': '0.694', 'fps': '7.85', 'cpu_peak': '34%', 'ram_peak': '84%', 'decode_ms': '7.1', 'detection_ms': '99.8', 'tracking_ms': '0.4', 'reid_ms': '9.0', 'matching_ms': '0.0', 'total_ai_ms': '116.3', 'status': 'Selesai'}
+
+======================================================================
+#22: RTDETRv2-s + BoT-SORT + OSNet
+======================================================================
+  -> {'cakupan': '228/259', 'identitas': '15/11', 'false_merge': '2', 'false_split': '4', 'akurasi': '4/11 (36.4%)', 'precision': '0.933', 'recall': '0.841', 'f1': '0.884', 'fps': '7.78', 'cpu_peak': '30%', 'ram_peak': '87%', 'decode_ms': '5.5', 'detection_ms': '102.8', 'tracking_ms': '10.5', 'reid_ms': '11.1', 'matching_ms': '0.0', 'total_ai_ms': '129.8', 'status': 'Selesai'}
+
+======================================================================
+#23: RTDETRv2-s + BoT-SORT + TransReID (ViT-B/16*)
+======================================================================
+  -> {'cakupan': '226/259', 'identitas': '16/11', 'false_merge': '4', 'false_split': '6', 'akurasi': '2/11 (18.2%)', 'precision': '0.888', 'recall': '0.872', 'f1': '0.880', 'fps': '7.80', 'cpu_peak': '40%', 'ram_peak': '87%', 'decode_ms': '5.6', 'detection_ms': '155.0', 'tracking_ms': '10.7', 'reid_ms': '24.5', 'matching_ms': '0.0', 'total_ai_ms': '196.0', 'status': 'Selesai'}
+
+======================================================================
+#24: RTDETRv2-s + BoT-SORT + BoT (ResNet50)
+======================================================================
+  -> {'cakupan': '228/259', 'identitas': '22/11', 'false_merge': '3', 'false_split': '10', 'akurasi': '0/11 (0.0%)', 'precision': '0.657', 'recall': '0.572', 'f1': '0.612', 'fps': '7.76', 'cpu_peak': '19%', 'ram_peak': '84%', 'decode_ms': '5.7', 'detection_ms': '136.8', 'tracking_ms': '10.4', 'reid_ms': '8.1', 'matching_ms': '0.0', 'total_ai_ms': '160.9', 'status': 'Selesai'}
+
+======================================================================
+#25: RTDETRv2-s + OC-SORT + OSNet
+======================================================================
+  -> {'cakupan': '223/259', 'identitas': '15/11', 'false_merge': '2', 'false_split': '4', 'akurasi': '5/11 (45.5%)', 'precision': '0.940', 'recall': '0.844', 'f1': '0.889', 'fps': '7.85', 'cpu_peak': '61%', 'ram_peak': '88%', 'decode_ms': '7.6', 'detection_ms': '122.1', 'tracking_ms': '1.0', 'reid_ms': '15.7', 'matching_ms': '0.0', 'total_ai_ms': '146.4', 'status': 'Selesai'}
+
+======================================================================
+#26: RTDETRv2-s + OC-SORT + TransReID (ViT-B/16*)
+======================================================================
+  -> {'cakupan': '222/259', 'identitas': '15/11', 'false_merge': '3', 'false_split': '6', 'akurasi': '4/11 (36.4%)', 'precision': '0.873', 'recall': '0.878', 'f1': '0.876', 'fps': '7.70', 'cpu_peak': '33%', 'ram_peak': '89%', 'decode_ms': '7.7', 'detection_ms': '188.4', 'tracking_ms': '1.0', 'reid_ms': '26.9', 'matching_ms': '0.0', 'total_ai_ms': '224.0', 'status': 'Selesai'}
+
+======================================================================
+#27: RTDETRv2-s + OC-SORT + BoT (ResNet50)
+======================================================================
+  -> {'cakupan': '223/259', 'identitas': '24/11', 'false_merge': '2', 'false_split': '10', 'akurasi': '0/11 (0.0%)', 'precision': '0.713', 'recall': '0.578', 'f1': '0.638', 'fps': '7.85', 'cpu_peak': '56%', 'ram_peak': '87%', 'decode_ms': '7.9', 'detection_ms': '172.3', 'tracking_ms': '1.0', 'reid_ms': '11.2', 'matching_ms': '0.0', 'total_ai_ms': '192.5', 'status': 'Selesai'}
+
+27 kombinasi selesai diproses. Hasil ditulis ke benchmark/pipeline-comparison.md

@@ -54,6 +54,7 @@ interface CameraEvent {
   snapshot_url: string | null;
   timestamp:    string;    // jam AI service (event terjadi)
   created_at:   string;    // jam backend insert row ini
+  ai_latency_ms: number | null;   // total_ai_ms frame terakhir (approx kasar)
   acknowledged: boolean;
 }
 
@@ -211,18 +212,22 @@ export class Dashboard implements OnInit {
 
   /** Instrumentasi evaluasi (bukan camera-to-dashboard — gak ada timestamp
    * asli dari kamera). Backend delay = created_at - timestamp (network + insert
-   * backend). End-to-end = jam browser terima response - timestamp (AI). AI
-   * processing latency-nya sendiri ada di ai-service/latency.csv per-frame,
-   * gak bisa dikorelasikan presisi ke satu event di sini (beda granularitas). */
+   * backend). End-to-end = jam browser terima response - timestamp (AI).
+   * ai_latency_ms = total_ai_ms frame TERAKHIR kamera itu saat event
+   * digenerate (dikirim AI service, lihat batch_processor.py._last_ai_ms) —
+   * approx kasar, BUKAN rata-rata seluruh tracklet (beda granularitas
+   * per-frame vs per-event) — dan BUKAN komponen yang perlu dijumlahin ke
+   * end_to_end_ms (udah otomatis kehitung di situ, lihat diskusi latency). */
   private _logLatency(events: CameraEvent[], receivedAt: number): void {
     for (const ev of events) {
       if (this._loggedLatencyIds.has(ev.id)) continue;
       this._loggedLatencyIds.add(ev.id);
       const aiTs   = new Date(ev.timestamp).getTime();
       const backTs = new Date(ev.created_at).getTime();
+      const aiMs   = ev.ai_latency_ms != null ? ev.ai_latency_ms.toFixed(1) : 'n/a';
       console.log(
         `[latency] event #${ev.id} cam=${ev.camera_id} ` +
-        `backend_delay_ms=${backTs - aiTs} end_to_end_ms=${receivedAt - aiTs}`
+        `ai_latency_ms=${aiMs} backend_delay_ms=${backTs - aiTs} end_to_end_ms=${receivedAt - aiTs}`
       );
     }
   }

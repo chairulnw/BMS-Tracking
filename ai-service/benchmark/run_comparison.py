@@ -22,6 +22,7 @@ Jalankan dari root ai-service/ (path di bawah relatif ke cwd, bukan ke lokasi
 file ini).
 """
 
+import csv
 import io
 import json
 import os
@@ -57,52 +58,41 @@ PRED_DIR       = Path("predictions_runs")          # artefak mentah per-run (ban
 PRED_CSV_DIR   = PRED_DIR / "predictions"           # predictions_NN_*.csv
 LOG_DIR        = PRED_DIR / "logs"                  # server_NN.log
 RESULTS_DIR    = PRED_DIR / "results"               # results*.json
+LATENCY_DIR    = PRED_DIR / "latency"               # latency_NN_*.csv (copy latency.csv tiap run)
 GT_PATH        = Path("sample/output.csv")
 MD_PATH        = Path("benchmark/pipeline-comparison.md")   # dokumen hasil (dibaca manusia), bareng script-nya
 MODEL_LOAD_TIMEOUT_SEC   = 300
 STREAM_DONE_TIMEOUT_SEC  = 1800
 POLL_SEC       = 3
-# Total frame di seluruh 28 klip sample/ (dihitung sekali, lihat komentar
-# di bawah) — dipakai buat FPS end-to-end (total frame / detik wall-clock),
-# BUKAN dari avg_batch_ms di /health, yang cuma ngukur waktu YOLO predict()
-# doang, tidak termasuk tracking + ekstraksi embedding Re-ID yang justru jadi
-# bottleneck sebenarnya (lihat catatan OSNet di CLAUDE.md/plan/06-decisions.md).
 TOTAL_FRAMES = 2168
-
-# (nomor tabel di pipeline-comparison.md, Detektor label, DETECTOR_MODEL,
-# Tracker label, TRACKER_TYPE, Re-ID label, REID_MODEL) — 27 kombinasi penuh
-# (3 detektor x 3 tracker x 3 Re-ID). "BoT (ResNet50)" pakai bot_resnet50
-# (checkpoint resmi Rank-1 94.5%, extractor sendiri) — BUKAN "resnet50" (nama
-# model torchreid, checkpoint-nya degenerate/rusak, lihat pipeline-comparison.md
-# baris # 3/6/9/... yang masih bertanda ‡ = belum di-rerun pakai bot_resnet50).
 COMBOS = [
-    (1,  "YOLO26n",    "checkpoints/yolo26n.pt",  "ByteTrack", "bytetrack", "OSNet",                "osnet_ain_x1_0"),
-    (2,  "YOLO26n",    "checkpoints/yolo26n.pt",  "ByteTrack", "bytetrack", "TransReID (ViT-B/16*)", "transreid"),
-    (3,  "YOLO26n",    "checkpoints/yolo26n.pt",  "ByteTrack", "bytetrack", "BoT (ResNet50)",        "bot_resnet50"),
-    (4,  "YOLO26n",    "checkpoints/yolo26n.pt",  "BoT-SORT",  "botsort",   "OSNet",                "osnet_ain_x1_0"),
-    (5,  "YOLO26n",    "checkpoints/yolo26n.pt",  "BoT-SORT",  "botsort",   "TransReID (ViT-B/16*)", "transreid"),
-    (6,  "YOLO26n",    "checkpoints/yolo26n.pt",  "BoT-SORT",  "botsort",   "BoT (ResNet50)",        "bot_resnet50"),
-    (7,  "YOLO26n",    "checkpoints/yolo26n.pt",  "OC-SORT",   "ocsort",    "OSNet",                "osnet_ain_x1_0"),
-    (8,  "YOLO26n",    "checkpoints/yolo26n.pt",  "OC-SORT",   "ocsort",    "TransReID (ViT-B/16*)", "transreid"),
-    (9,  "YOLO26n",    "checkpoints/yolo26n.pt",  "OC-SORT",   "ocsort",    "BoT (ResNet50)",        "bot_resnet50"),
-    (10, "YOLO11n",    "checkpoints/yolo11n.pt",  "ByteTrack", "bytetrack", "OSNet",                "osnet_ain_x1_0"),
-    (11, "YOLO11n",    "checkpoints/yolo11n.pt",  "ByteTrack", "bytetrack", "TransReID (ViT-B/16*)", "transreid"),
-    (12, "YOLO11n",    "checkpoints/yolo11n.pt",  "ByteTrack", "bytetrack", "BoT (ResNet50)",        "bot_resnet50"),
-    (13, "YOLO11n",    "checkpoints/yolo11n.pt",  "BoT-SORT",  "botsort",   "OSNet",                "osnet_ain_x1_0"),
-    (14, "YOLO11n",    "checkpoints/yolo11n.pt",  "BoT-SORT",  "botsort",   "TransReID (ViT-B/16*)", "transreid"),
-    (15, "YOLO11n",    "checkpoints/yolo11n.pt",  "BoT-SORT",  "botsort",   "BoT (ResNet50)",        "bot_resnet50"),
-    (16, "YOLO11n",    "checkpoints/yolo11n.pt",  "OC-SORT",   "ocsort",    "OSNet",                "osnet_ain_x1_0"),
-    (17, "YOLO11n",    "checkpoints/yolo11n.pt",  "OC-SORT",   "ocsort",    "TransReID (ViT-B/16*)", "transreid"),
-    (18, "YOLO11n",    "checkpoints/yolo11n.pt",  "OC-SORT",   "ocsort",    "BoT (ResNet50)",        "bot_resnet50"),
-    (19, "RTDETRv2-s", "checkpoints/rtdetr-l.pt", "ByteTrack", "bytetrack", "OSNet",                "osnet_ain_x1_0"),
-    (20, "RTDETRv2-s", "checkpoints/rtdetr-l.pt", "ByteTrack", "bytetrack", "TransReID (ViT-B/16*)", "transreid"),
-    (21, "RTDETRv2-s", "checkpoints/rtdetr-l.pt", "ByteTrack", "bytetrack", "BoT (ResNet50)",        "bot_resnet50"),
-    (22, "RTDETRv2-s", "checkpoints/rtdetr-l.pt", "BoT-SORT",  "botsort",   "OSNet",                "osnet_ain_x1_0"),
-    (23, "RTDETRv2-s", "checkpoints/rtdetr-l.pt", "BoT-SORT",  "botsort",   "TransReID (ViT-B/16*)", "transreid"),
-    (24, "RTDETRv2-s", "checkpoints/rtdetr-l.pt", "BoT-SORT",  "botsort",   "BoT (ResNet50)",        "bot_resnet50"),
-    (25, "RTDETRv2-s", "checkpoints/rtdetr-l.pt", "OC-SORT",   "ocsort",    "OSNet",                "osnet_ain_x1_0"),
-    (26, "RTDETRv2-s", "checkpoints/rtdetr-l.pt", "OC-SORT",   "ocsort",    "TransReID (ViT-B/16*)", "transreid"),
-    (27, "RTDETRv2-s", "checkpoints/rtdetr-l.pt", "OC-SORT",   "ocsort",    "BoT (ResNet50)",        "bot_resnet50"),
+    (1,  "YOLO26n",    "yolo26n.pt",  "ByteTrack", "bytetrack", "OSNet",                "osnet_ain_x1_0"),
+    (2,  "YOLO26n",    "yolo26n.pt",  "ByteTrack", "bytetrack", "TransReID (ViT-B/16*)", "transreid"),
+    (3,  "YOLO26n",    "yolo26n.pt",  "ByteTrack", "bytetrack", "BoT (ResNet50)",        "bot_resnet50"),
+    (4,  "YOLO26n",    "yolo26n.pt",  "BoT-SORT",  "botsort",   "OSNet",                "osnet_ain_x1_0"),
+    (5,  "YOLO26n",    "yolo26n.pt",  "BoT-SORT",  "botsort",   "TransReID (ViT-B/16*)", "transreid"),
+    (6,  "YOLO26n",    "yolo26n.pt",  "BoT-SORT",  "botsort",   "BoT (ResNet50)",        "bot_resnet50"),
+    (7,  "YOLO26n",    "yolo26n.pt",  "OC-SORT",   "ocsort",    "OSNet",                "osnet_ain_x1_0"),
+    (8,  "YOLO26n",    "yolo26n.pt",  "OC-SORT",   "ocsort",    "TransReID (ViT-B/16*)", "transreid"),
+    (9,  "YOLO26n",    "yolo26n.pt",  "OC-SORT",   "ocsort",    "BoT (ResNet50)",        "bot_resnet50"),
+    (10, "YOLO11n",    "yolo11n.pt",  "ByteTrack", "bytetrack", "OSNet",                "osnet_ain_x1_0"),
+    (11, "YOLO11n",    "yolo11n.pt",  "ByteTrack", "bytetrack", "TransReID (ViT-B/16*)", "transreid"),
+    (12, "YOLO11n",    "yolo11n.pt",  "ByteTrack", "bytetrack", "BoT (ResNet50)",        "bot_resnet50"),
+    (13, "YOLO11n",    "yolo11n.pt",  "BoT-SORT",  "botsort",   "OSNet",                "osnet_ain_x1_0"),
+    (14, "YOLO11n",    "yolo11n.pt",  "BoT-SORT",  "botsort",   "TransReID (ViT-B/16*)", "transreid"),
+    (15, "YOLO11n",    "yolo11n.pt",  "BoT-SORT",  "botsort",   "BoT (ResNet50)",        "bot_resnet50"),
+    (16, "YOLO11n",    "yolo11n.pt",  "OC-SORT",   "ocsort",    "OSNet",                "osnet_ain_x1_0"),
+    (17, "YOLO11n",    "yolo11n.pt",  "OC-SORT",   "ocsort",    "TransReID (ViT-B/16*)", "transreid"),
+    (18, "YOLO11n",    "yolo11n.pt",  "OC-SORT",   "ocsort",    "BoT (ResNet50)",        "bot_resnet50"),
+    (19, "RTDETRv2-s", "rtdetr-l.pt", "ByteTrack", "bytetrack", "OSNet",                "osnet_ain_x1_0"),
+    (20, "RTDETRv2-s", "rtdetr-l.pt", "ByteTrack", "bytetrack", "TransReID (ViT-B/16*)", "transreid"),
+    (21, "RTDETRv2-s", "rtdetr-l.pt", "ByteTrack", "bytetrack", "BoT (ResNet50)",        "bot_resnet50"),
+    (22, "RTDETRv2-s", "rtdetr-l.pt", "BoT-SORT",  "botsort",   "OSNet",                "osnet_ain_x1_0"),
+    (23, "RTDETRv2-s", "rtdetr-l.pt", "BoT-SORT",  "botsort",   "TransReID (ViT-B/16*)", "transreid"),
+    (24, "RTDETRv2-s", "rtdetr-l.pt", "BoT-SORT",  "botsort",   "BoT (ResNet50)",        "bot_resnet50"),
+    (25, "RTDETRv2-s", "rtdetr-l.pt", "OC-SORT",   "ocsort",    "OSNet",                "osnet_ain_x1_0"),
+    (26, "RTDETRv2-s", "rtdetr-l.pt", "OC-SORT",   "ocsort",    "TransReID (ViT-B/16*)", "transreid"),
+    (27, "RTDETRv2-s", "rtdetr-l.pt", "OC-SORT",   "ocsort",    "BoT (ResNet50)",        "bot_resnet50"),
 ]
 
 
@@ -189,6 +179,13 @@ def run_one(idx: int, detector_model: str, tracker_type: str, reid_model: str) -
     pred_dst = PRED_CSV_DIR / f"predictions_{idx:02d}_{slug}.csv"
     shutil.copy("predictions.csv", pred_dst)
 
+    lat_src = Path("latency.csv")
+    lat_avg = {}
+    if lat_src.exists():
+        lat_dst = LATENCY_DIR / f"latency_{idx:02d}_{slug}.csv"
+        shutil.copy(lat_src, lat_dst)
+        lat_avg = avg_latency(lat_dst)
+
     evaluate.GT_PATH   = GT_PATH
     evaluate.PRED_PATH = pred_dst
     buf = io.StringIO()
@@ -199,7 +196,22 @@ def run_one(idx: int, detector_model: str, tracker_type: str, reid_model: str) -
         "cpu_peak": f"{cpu_peak:.0f}%" if cpu_peak is not None else "",
         "ram_peak": f"{ram_peak:.0f}%" if ram_peak is not None else "",
         "fps":      f"{fps:.2f}" if fps is not None else "",
+        **lat_avg,
     }
+
+
+def avg_latency(path: Path) -> dict:
+    """Rata-rata tiap kolom ms di latency_NN_*.csv (instrumentasi per-frame
+    dari batch_processor.py) — buat kolom breakdown latency di tabel."""
+    rows = list(csv.DictReader(open(path)))
+    if not rows:
+        return {}
+    cols = ["decode_ms", "detection_ms", "tracking_ms", "reid_ms", "matching_ms", "total_ai_ms"]
+    out = {}
+    for col in cols:
+        vals = [float(r[col]) for r in rows if r.get(col)]
+        out[col] = f"{sum(vals) / len(vals):.1f}" if vals else ""
+    return out
 
 
 def parse_metrics(stdout: str) -> dict:
@@ -236,6 +248,10 @@ COL_MAP = {
     "status": 5, "cakupan": 6, "identitas": 7, "precision": 8, "recall": 9,
     "f1": 10, "akurasi": 11, "false_merge": 12, "false_split": 13,
     "fps": 14, "cpu_peak": 15, "ram_peak": 16,
+    # Rata-rata per-frame dari latency.csv (lihat latency_logger.py) — kosong
+    # buat kombinasi lama yang belum di-rerun setelah instrumentasi ini ada.
+    "decode_ms": 17, "detection_ms": 18, "tracking_ms": 19,
+    "reid_ms": 20, "matching_ms": 21, "total_ai_ms": 22,
 }
 
 
@@ -265,7 +281,9 @@ def run_combo(num: int, results: list[dict]) -> list[dict]:
     try:
         res = run_one(num, detector_model, tracker_type, reid_model)
         metrics = parse_metrics(res["stdout"])
-        metrics["fps"], metrics["cpu_peak"], metrics["ram_peak"] = res["fps"], res["cpu_peak"], res["ram_peak"]
+        for key in ("fps", "cpu_peak", "ram_peak", "decode_ms", "detection_ms",
+                    "tracking_ms", "reid_ms", "matching_ms", "total_ai_ms"):
+            metrics[key] = res.get(key, "")
         metrics["status"] = "Selesai"
         print(f"  -> {metrics}")
         results.append({"num": num, "detektor": det_label, "tracker": trk_label,
@@ -283,6 +301,7 @@ def main() -> None:
     PRED_CSV_DIR.mkdir(parents=True, exist_ok=True)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    LATENCY_DIR.mkdir(parents=True, exist_ok=True)
     results_path = RESULTS_DIR / "results.json"
     results: list[dict] = json.loads(results_path.read_text()) if results_path.exists() else []
 

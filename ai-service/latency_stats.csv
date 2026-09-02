@@ -1,0 +1,9 @@
+event_type,component,n,avg_ms,min_ms,max_ms
+person_detected,tracking_ms,895,0.679,0.148,34.846
+person_detected,reid_ms_real,801,45.174,26.201,908.908
+person_detected,matching_ms_real,243,0.21,0.051,15.877
+person_detected,total_ai_ms,1065,126.561,10.092,1096.888
+zone_entry,tracking_ms,2,0.719,0.639,0.799
+zone_entry,reid_ms_real,2,44.732,44.313,45.151
+zone_entry,matching_ms_real,1,0.073,0.073,0.073
+zone_entry,total_ai_ms,7,104.666,64.761,175.966

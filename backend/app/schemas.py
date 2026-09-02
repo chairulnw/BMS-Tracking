@@ -261,6 +261,7 @@ class CameraEventCreate(BaseModel):
     snapshot_url: str | None = None
     person_label: str | None = None
     timestamp:    datetime | None = None
+    ai_latency_ms: float | None = None   # total_ai_ms frame terakhir (approx kasar, lihat backend_client.py)
 
 
 class CameraEventResponse(BaseModel):
@@ -274,6 +275,7 @@ class CameraEventResponse(BaseModel):
     person_label: str | None
     timestamp:    datetime
     created_at:   datetime   # jam backend insert — buat hitung network/backend delay vs `timestamp` (jam AI)
+    ai_latency_ms: float | None   # total_ai_ms frame terakhir (approx kasar, lihat backend_client.py)
     acknowledged:    bool
     acknowledged_at: datetime | None
 

@@ -15,12 +15,12 @@ async def create_camera_event(req: CameraEventCreate, request: Request) -> Camer
     row  = await pool.fetchrow(
         """
         INSERT INTO camera_events
-            (camera_id, event_type, category, description, snapshot_url, person_label, timestamp)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+            (camera_id, event_type, category, description, snapshot_url, person_label, timestamp, ai_latency_ms)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *
         """,
         req.camera_id, req.event_type, req.category,
-        req.description, req.snapshot_url, req.person_label, ts,
+        req.description, req.snapshot_url, req.person_label, ts, req.ai_latency_ms,
     )
     cam = await pool.fetchrow(
         "SELECT name FROM cameras WHERE camera_id = $1", req.camera_id

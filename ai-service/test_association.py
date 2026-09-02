@@ -1,7 +1,5 @@
-"""Self-check untuk asosiasi identitas level-tracklet (Fase 2).
+"""Self-check untuk asosiasi identitas level-tracklet.
 Tanpa framework — jalankan langsung: python test_association.py
-
-Lihat plan/07-fase2-detail.md §8 untuk daftar kasus yang wajib ada.
 """
 
 from datetime import datetime, timedelta, timezone

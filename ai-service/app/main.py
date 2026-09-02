@@ -29,7 +29,9 @@ from app.schemas import DEFAULT_CONF_THRESHOLD, ASSOC_THRESHOLD
 from app.services import retention
 from app.services.stream_service import StreamManager
 
-DETECTOR_MODEL = os.getenv("DETECTOR_MODEL", "checkpoints/yolo26n.pt")
+# .env cukup nama file (mis. "yolo26n.pt") — folder checkpoints/ digabung di
+# sini, satu tempat, biar gak perlu ditulis ulang tiap kombinasi/dokumentasi.
+DETECTOR_MODEL = f"checkpoints/{os.getenv('DETECTOR_MODEL', 'yolo26n.pt')}"
 REID_MODEL = os.getenv("REID_MODEL", "osnet_ain_x1_0")
 
 
