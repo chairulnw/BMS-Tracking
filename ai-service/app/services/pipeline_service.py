@@ -33,15 +33,17 @@ from app.services.geometry import cross_side, foot_point_xyxy, is_in_side
 BUFFER_FRAMES      = 10
 NEAR_LINE_DIST     = 40
 MIN_CROP_PX        = 32
-MIN_MARGIN         = 0.05   # gap minimum top1-top2 untuk confident match
-STRONG_MATCH       = 0.84   # skor top1 >= ini: langsung match, lewati gate margin
-MAX_BANK_SIZE      = 5      # maks entry per identitas di bank embedding
+MIN_MARGIN         = 0.025   # gap minimum top1-top2 untuk confident match
+STRONG_MATCH       = 0.85   # skor top1 >= ini: langsung match, lewati gate margin
+MAX_BANK_SIZE      = 4      # maks entry per identitas di bank embedding
 BANK_MERGE_SIM     = 0.90   # sim >= ini → update entry lama, bukan tambah baru
 BANK_STALE_HOURS   = 6.0    # entry yang tidak jadi top-match selama N jam → kandidat pruning
-QUALITY_MIN_H      = 80     # tinggi crop minimum (px)
-QUALITY_MIN_W      = 40     # lebar crop minimum (px)
-QUALITY_MIN_RATIO  = 1.8    # min h/w — person portrait aspect ratio
+QUALITY_MIN_H      = 100
+QUALITY_MIN_W      = 50
+QUALITY_MIN_RATIO  = 1.75
 QUALITY_LAP_VAR    = 100.0  # min Laplacian variance — blur gate
+QUALITY_MIN_CONF   = 0.70   # min confidence YOLO — box di bawah ini tidak ikut jadi
+                            # embedding sample (detektor sendiri sudah motong di 0.6)
 
 DEBUG_CROPS_DIR = Path("debug_crops")
 
@@ -56,9 +58,9 @@ def _debug_reid() -> bool:
 # dihidupkan lagi).
 # ASSOC_THRESHOLD didefinisikan di app.schemas (satu sumber, dipakai juga sebagai
 # default reid_threshold di ProcessVideoRequest/StreamStartRequest).
-TRACKLET_GAP_CYCLES    = 15       # siklus batch berturut-turut track hilang → tutup tracklet
+TRACKLET_GAP_CYCLES    = 20       # siklus batch berturut-turut track hilang → tutup tracklet
 TRACKLET_MAX_DURATION  = 600.0    # detik — tutup paksa + buka tracklet baru dengan key sama
-TRACKLET_MAX_SAMPLES   = 16       # maks embedding disimpan per tracklet (top-K by quality)
+TRACKLET_MAX_SAMPLES   = 16       # maks embedding disimpan per tracklet (top-K by ketajaman*conf)
 TRACKLET_MAX_POSITIONS = 120      # maks titik kaki disimpan per tracklet (garis lintasan/heatmap)
 # ponytail: cap keras + FIFO drop titik TERTUA kalau kepenuhan — cukup buat tracklet
 # normal (detik-menit). Kalau nanti perlu path presisi untuk tracklet super panjang
@@ -168,8 +170,9 @@ class IdentityDB:
         ts: datetime,
     ) -> None:
         """Kumpulkan bukti untuk tracklet ini. Dipanggil tiap box per siklus
-        batch, termasuk box yang gagal quality gate (emb None) — itu tetap
-        menaikkan n_det dan last_seen tapi tidak menambah sample."""
+        batch, termasuk box yang gagal quality gate (emb None) atau conf <
+        QUALITY_MIN_CONF — itu tetap menaikkan n_det dan last_seen tapi tidak
+        menambah sample."""
         key = self._key(track_id, cam_id)
         tl = self._open.get(key)
         if tl is None:
@@ -188,17 +191,21 @@ class IdentityDB:
         if len(tl.positions) >= TRACKLET_MAX_POSITIONS:
             tl.positions.pop(0)
         tl.positions.append(foot_point_xyxy(x1, y1, x2, y2))
-        if emb is not None:
-            self._add_sample(tl, emb, quality)
+        if emb is not None and conf >= QUALITY_MIN_CONF:
+            self._add_sample(tl, emb, quality, conf)
 
     @staticmethod
-    def _add_sample(tl: Tracklet, emb: np.ndarray, quality: float) -> None:
+    def _add_sample(tl: Tracklet, emb: np.ndarray, quality: float, conf: float = 1.0) -> None:
+        # Skor sampel = ketajaman (Laplacian var) * confidence deteksi YOLO.
+        # Box tajam tapi conf rendah (deteksi ragu / box meleset) tidak lagi
+        # menang atas box conf tinggi hanya karena kebetulan lebih tajam.
+        score = quality * conf
         if len(tl.samples) < TRACKLET_MAX_SAMPLES:
-            tl.samples.append((emb, quality))
+            tl.samples.append((emb, score))
             return
         worst_idx = min(range(len(tl.samples)), key=lambda i: tl.samples[i][1])
-        if quality > tl.samples[worst_idx][1]:
-            tl.samples[worst_idx] = (emb, quality)
+        if score > tl.samples[worst_idx][1]:
+            tl.samples[worst_idx] = (emb, score)
 
     def update_active(self, cam_id: str, track_ids: "set[int]") -> None:
         """Dipanggil tiap siklus batch. Update tracklet mana yang masih 'hidup'

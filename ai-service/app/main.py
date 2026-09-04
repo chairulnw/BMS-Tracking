@@ -32,7 +32,7 @@ from app.services.stream_service import StreamManager
 # .env cukup nama file (mis. "yolo26n.pt") — folder checkpoints/ digabung di
 # sini, satu tempat, biar gak perlu ditulis ulang tiap kombinasi/dokumentasi.
 DETECTOR_MODEL = f"checkpoints/{os.getenv('DETECTOR_MODEL', 'yolo26n.pt')}"
-REID_MODEL = os.getenv("REID_MODEL", "osnet_ain_x1_0")
+REID_MODEL = os.getenv("REID_MODEL", "transreid")
 
 
 @asynccontextmanager

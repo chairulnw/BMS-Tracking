@@ -132,14 +132,13 @@ def load_model_bundle(detector_model: str, reid_model: str) -> _ModelBundle:
     tracker_args = None
     if tracker_yaml is not None:
         tracker_cfg  = YAML.load(check_yaml(tracker_yaml))
-        # ponytail: default track_buffer=30 frame kadang bikin tracklet baru
-        # (identity split) tiap orang sempat ke-occlude sebentar (lewat
-        # pilar/tumpang tindih sama orang lain) — tracker keburu nyerah dan
-        # kasih track_id baru sebelum orangnya kelihatan lagi. Dinaikkan biar
-        # lebih toleran; naikkan lagi kalau masih sering split di kasus
-        # occlusion-di-belakang-objek (bukan dua-orang-crossing, itu limitasi
-        # IoU tracker terpisah, gak kebantu parameter ini).
-        tracker_cfg["track_buffer"] = 60
+        tracker_cfg["track_buffer"] = 90
+        # FPS efektif rendah (~1-3/kamera) → orang loncat jauh antar siklus
+        # inferensi, IoU box turun di bawah default 0.8 → ByteTrack keburu
+        # ganti track_id (contoh: track 21→22 di tengah satu kemunculan).
+        # Dilonggarkan biar asosiasi masih nyambung; naikkan lagi kalau mulai
+        # nyambungin dua orang beda yang lewat berdekatan.
+        tracker_cfg["match_thresh"] = 0.6
         tracker_args = IterableSimpleNamespace(**tracker_cfg)
 
     # PAR (atribut penampilan, Fase 3) — dijalankan sekali per tracklet pada
