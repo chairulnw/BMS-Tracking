@@ -35,7 +35,7 @@ NEAR_LINE_DIST     = 40
 MIN_CROP_PX        = 32
 MIN_MARGIN         = 0.025   # gap minimum top1-top2 untuk confident match
 STRONG_MATCH       = 0.85   # skor top1 >= ini: langsung match, lewati gate margin
-MAX_BANK_SIZE      = 4      # maks entry per identitas di bank embedding
+MAX_BANK_SIZE      = 2      # maks entry per identitas di bank embedding
 BANK_MERGE_SIM     = 0.90   # sim >= ini → update entry lama, bukan tambah baru
 BANK_STALE_HOURS   = 6.0    # entry yang tidak jadi top-match selama N jam → kandidat pruning
 QUALITY_MIN_H      = 100
@@ -61,6 +61,9 @@ def _debug_reid() -> bool:
 TRACKLET_GAP_CYCLES    = 20       # siklus batch berturut-turut track hilang → tutup tracklet
 TRACKLET_MAX_DURATION  = 600.0    # detik — tutup paksa + buka tracklet baru dengan key sama
 TRACKLET_MAX_SAMPLES   = 16       # maks embedding disimpan per tracklet (top-K by ketajaman*conf)
+MIN_TRACKLET_DET       = 2        # tracklet dengan n_det < ini dibuang (tidak di-enroll/di-match).
+                                  # Fragmen 1-deteksi = embedding 1 crop noisy → jadi sumber
+                                  # identitas sampah (contoh: Unknown #3 lahir dari tracklet n_det=1).
 TRACKLET_MAX_POSITIONS = 120      # maks titik kaki disimpan per tracklet (garis lintasan/heatmap)
 # ponytail: cap keras + FIFO drop titik TERTUA kalau kepenuhan — cukup buat tracklet
 # normal (detik-menit). Kalau nanti perlu path presisi untuk tracklet super panjang
@@ -207,6 +210,13 @@ class IdentityDB:
         if score > tl.samples[worst_idx][1]:
             tl.samples[worst_idx] = (emb, score)
 
+    def samples_full(self, cam_id: str, track_id: int) -> bool:
+        """True kalau tracklet terbuka ini sudah punya TRACKLET_MAX_SAMPLES
+        sampel — dipakai batch_processor untuk berhenti ekstraksi ReID pada
+        track yang sudah cukup ter-sampel (hemat FPS pada tracklet panjang)."""
+        tl = self._open.get(self._key(track_id, cam_id))
+        return tl is not None and len(tl.samples) >= TRACKLET_MAX_SAMPLES
+
     def update_active(self, cam_id: str, track_ids: "set[int]") -> None:
         """Dipanggil tiap siklus batch. Update tracklet mana yang masih 'hidup'
         (missing=0) dan mana yang mulai hilang (missing += 1)."""
@@ -278,7 +288,7 @@ class IdentityDB:
         return None, best_score
 
     def _resolve_tracklet(self, tl: Tracklet) -> "dict | None":
-        if not tl.samples:
+        if not tl.samples or tl.n_det < MIN_TRACKLET_DET:
             return None  # tidak ada bukti visual yang layak — buang, tidak ada POST
 
         mean = np.mean([e for e, _ in tl.samples], axis=0)
