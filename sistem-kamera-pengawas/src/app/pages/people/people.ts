@@ -1,4 +1,4 @@
-import { Component, DestroyRef, inject, OnInit } from '@angular/core';
+import { Component, DestroyRef, ElementRef, inject, OnInit } from '@angular/core';
 import { NgClass } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { ActivatedRoute, Router } from '@angular/router';
@@ -95,6 +95,25 @@ const ACCESSORIES: { id: string; label: string; attrNames: string[] }[] = [
   { id: 'sunglasses', label: 'Kacamata', attrNames: ['head glasses'] },
 ];
 
+// State terakhir sebelum user membuka Person Investigation — dipulihkan saat
+// kembali ke /people. Hilang saat full reload (memang: reload = mulai bersih).
+// ponytail: module var, cukup satu file — bukan RouteReuseStrategy.
+interface PeopleSnapshot {
+  activeTab: 'deteksi' | 'orang';
+  searchQuery: string;
+  selectedDate: string;
+  selectedCameras: string[];
+  upperColors: string[];
+  lowerColors: string[];
+  gender: 'male' | 'female' | null;
+  selectedAccessories: string[];
+  similarTo: number | null;
+  page: number;
+  orangPage: number;
+  scrollY: number;
+}
+let savedState: PeopleSnapshot | null = null;
+
 @Component({
   selector: 'app-people',
   standalone: true,
@@ -107,6 +126,15 @@ export class People implements OnInit {
   private router     = inject(Router);
   private route      = inject(ActivatedRoute);
   private destroyRef = inject(DestroyRef);
+  private host       = inject(ElementRef);
+
+  // Kontainer scroll adalah .content (app.css), bukan window.
+  private get _scroller(): Element | null {
+    return (this.host.nativeElement as HTMLElement).closest('.content');
+  }
+
+  // Tab aktif di bawah search/filter — hanya satu section tampil sekaligus.
+  activeTab: 'deteksi' | 'orang' = 'deteksi';
 
   // ── Search & filter state ─────────────────────────────────────────────────
   searchQuery = '';
@@ -142,7 +170,7 @@ export class People implements OnInit {
   orangPage  = 1;
   orangPages = 1;
 
-  private readonly limit = 6;   // satu halaman = satu baris kartu (lihat .orang-grid/.deteksi-grid, 6 kolom)
+  private readonly limit = 24;   // 6 kolom × 4 baris per halaman (lihat .orang-grid/.deteksi-grid)
 
   // ── "Beri nama" inline form — di card ORANG, bukan per-deteksi ─────────────
   namingPersonId: number | null = null;
@@ -152,8 +180,18 @@ export class People implements OnInit {
 
   private search$ = new Subject<void>();
 
+  // scrollTop yang menunggu dipulihkan setelah data render (lihat _loadFeed/_loadPersons)
+  private _pendingScroll: number | null = null;
+
   ngOnInit(): void {
     this._loadCameras();
+
+    const restored = savedState;
+    savedState = null;
+    if (restored) {
+      const { scrollY, ...state } = restored;
+      Object.assign(this, state);
+    }
 
     const qp = this.route.snapshot.queryParamMap.get('similar_to');
     if (qp) this.similarTo = Number(qp);
@@ -167,7 +205,14 @@ export class People implements OnInit {
       takeUntilDestroyed(this.destroyRef),
     ).subscribe(() => this._reload());
 
-    this._reload();
+    if (restored) {
+      // pulihkan tanpa reset page/tab; scroll dipulihkan setelah data render
+      this._pendingScroll = restored.scrollY;
+      this._loadFeed();
+      this._loadPersons();
+    } else {
+      this._reload();
+    }
   }
 
   private _loadCameras(): void {
@@ -310,6 +355,7 @@ export class People implements OnInit {
         this.deteksi = res.items;
         this.total   = res.total;
         this.pages   = res.pages;
+        this._restoreScroll();
       },
       error: err => console.error('[people] feed error:', err),
     });
@@ -322,9 +368,17 @@ export class People implements OnInit {
         this.orang      = res.items.filter((i): i is FeedItem & { person_id: number } => i.person_id != null);
         this.orangTotal = res.total;
         this.orangPages = res.pages;
+        this._restoreScroll();
       },
       error: err => console.error('[people] persons error:', err),
     });
+  }
+
+  private _restoreScroll(): void {
+    if (this._pendingScroll == null) return;
+    const y = this._pendingScroll;
+    this._pendingScroll = null;
+    setTimeout(() => this._scroller?.scrollTo(0, y), 0);
   }
 
   goToPage(p: number): void {
@@ -364,6 +418,20 @@ export class People implements OnInit {
 
   openPerson(personId: number): void {
     if (this.namingPersonId === personId) return; // form nama sedang terbuka, jangan navigasi
+    savedState = {
+      activeTab: this.activeTab,
+      searchQuery: this.searchQuery,
+      selectedDate: this.selectedDate,
+      selectedCameras: this.selectedCameras,
+      upperColors: this.upperColors,
+      lowerColors: this.lowerColors,
+      gender: this.gender,
+      selectedAccessories: this.selectedAccessories,
+      similarTo: this.similarTo,
+      page: this.page,
+      orangPage: this.orangPage,
+      scrollY: this._scroller?.scrollTop ?? 0,
+    };
     this.router.navigate(['/people', personId]);
   }
 

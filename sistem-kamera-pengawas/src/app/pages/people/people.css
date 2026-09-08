@@ -153,6 +153,49 @@
   flex-wrap: wrap;
 }
 
+.tab-bar {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+
+.tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #6A7282;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 10px 14px;
+  margin-bottom: -1px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.tab-btn:hover { color: #D1D5DC; }
+
+.tab-btn--active {
+  color: #D1D5DC;
+  border-bottom-color: #E7000B;
+}
+
+.tab-count {
+  background: rgba(255,255,255,0.08);
+  color: #D1D5DC;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 20px;
+  padding: 1px 7px;
+}
+
+.tab-btn--active .tab-count {
+  background: #E7000B;
+  color: #fff;
+}
+
 .attr-toggle-btn {
   display: inline-flex;
   align-items: center;
@@ -265,7 +308,7 @@
 
 .orang-grid, .deteksi-grid {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);   /* 1 halaman = 1 baris = 6 kartu, tidak pernah overflow */
+  grid-template-columns: repeat(6, 1fr);   /* 6 kolom; limit 24 → 4 baris per halaman */
   gap: 16px;
 }
 
@@ -297,6 +340,7 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
+  object-position: center 20%;
   display: block;
 }
 

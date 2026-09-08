@@ -108,7 +108,20 @@
     </div>
   }
 
+  <!-- ── Tab: Deteksi (utama) / Orang — satu tampil sekaligus ──────────── -->
+  <div class="tab-bar">
+    <button type="button" [ngClass]="['tab-btn', activeTab === 'deteksi' ? 'tab-btn--active' : '']"
+      (click)="activeTab = 'deteksi'">
+      Deteksi <span class="tab-count">{{ total }}</span>
+    </button>
+    <button type="button" [ngClass]="['tab-btn', activeTab === 'orang' ? 'tab-btn--active' : '']"
+      (click)="activeTab = 'orang'">
+      Orang <span class="tab-count">{{ orangTotal }}</span>
+    </button>
+  </div>
+
   <!-- ── Section ORANG — GET /people/persons, paginasi sendiri ──────────── -->
+  @if (activeTab === 'orang') {
   <div class="card">
     <div class="card-header">
       <div>
@@ -194,7 +207,10 @@
     }
   </div>
 
+  }
+
   <!-- ── Section DETEKSI — raw, urut waktu, paginated ────────────────────── -->
+  @if (activeTab === 'deteksi') {
   <div class="card">
     <div class="card-header">
       <div>
@@ -249,5 +265,6 @@
       </div>
     }
   </div>
+  }
 
 </div>

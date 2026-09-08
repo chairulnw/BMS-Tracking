@@ -136,13 +136,10 @@ def load_model_bundle(detector_model: str, reid_model: str) -> _ModelBundle:
     tracker_args = None
     if tracker_yaml is not None:
         tracker_cfg  = YAML.load(check_yaml(tracker_yaml))
-        tracker_cfg["track_buffer"] = 90
-        # FPS efektif rendah (~1-3/kamera) → orang loncat jauh antar siklus
-        # inferensi, IoU box turun di bawah default 0.8 → ByteTrack keburu
-        # ganti track_id (contoh: track 21→22 di tengah satu kemunculan).
-        # Dilonggarkan biar asosiasi masih nyambung; naikkan lagi kalau mulai
-        # nyambungin dua orang beda yang lewat berdekatan.
-        tracker_cfg["match_thresh"] = 0.6
+        # Pakai default ByteTrack (track_buffer 30, match_thresh 0.8): eval
+        # nunjukin tracker ketat + asosiasi-tracklet longgar > tracker longgar
+        # (track_id melayang nyebrang orang saat occlusion → tracklet
+        # terkontaminasi). Lihat predictions_runs_current/eval_oldcfg_*.
         tracker_args = IterableSimpleNamespace(**tracker_cfg)
 
     # PAR (atribut penampilan, Fase 3) — dijalankan sekali per tracklet pada
@@ -597,6 +594,8 @@ class BatchProcessor:
             # Tetap jalan walau _skip_backend_persist=True — inilah yang
             # dibutuhkan evaluasi akurasi.
             self._pred_logger.flush((cam, result["track_id"]), result["display_name"])
+            for frag_tid in result.get("folded_track_ids", ()):
+                self._pred_logger.flush((cam, frag_tid), result["display_name"])
 
     def _on_reconnect(self, slot: _CamSlot, success: bool) -> None:
         if not success:

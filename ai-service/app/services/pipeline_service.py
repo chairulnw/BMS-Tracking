@@ -33,16 +33,19 @@ from app.services.geometry import cross_side, foot_point_xyxy, is_in_side
 BUFFER_FRAMES      = 10
 NEAR_LINE_DIST     = 40
 MIN_CROP_PX        = 32
-MIN_MARGIN         = 0.025   # gap minimum top1-top2 untuk confident match
+MIN_MARGIN         = 0.04   # gap minimum top1-top2 untuk confident match
 MAX_BANK_SIZE      = 5      # maks entry per identitas di bank embedding
 BANK_MERGE_SIM     = 0.90   # sim >= ini → update entry lama, bukan tambah baru
+BANK_EXPAND_MIN    = 0.67   # skor match tracklet < ini → JANGAN tambah prototipe bank baru,
+                            # cukup touch. Hanya blokir match yang NYARIS threshold
+                            # (~0.65-0.67) — itu yang sering bawa embedding generik/
+                            # terkontaminasi & bikin identitas jadi "magnet" (Unknown #1).
+                            # Di atas 0.67 = match normal, boleh bangun keragaman view bank.
 BANK_STALE_HOURS   = 6.0    # entry yang tidak jadi top-match selama N jam → kandidat pruning
-QUALITY_MIN_H      = 100
-QUALITY_MIN_W      = 50
-QUALITY_MIN_RATIO  = 1.75
+QUALITY_MIN_H      = 80     # tinggi crop minimum (px)
+QUALITY_MIN_W      = 40     # lebar crop minimum (px)
+QUALITY_MIN_RATIO  = 1.8    # min h/w — person portrait aspect ratio
 QUALITY_LAP_VAR    = 100.0  # min Laplacian variance — blur gate
-QUALITY_MIN_CONF   = 0.70   # min confidence YOLO — box di bawah ini tidak ikut jadi
-                            # embedding sample (detektor sendiri sudah motong di 0.6)
 
 DEBUG_CROPS_DIR = Path("debug_crops")
 
@@ -57,11 +60,17 @@ def _debug_reid() -> bool:
 # dihidupkan lagi).
 # ASSOC_THRESHOLD didefinisikan di app.schemas (satu sumber, dipakai juga sebagai
 # default reid_threshold di ProcessVideoRequest/StreamStartRequest).
-TRACKLET_GAP_CYCLES    = 20       # siklus batch berturut-turut track hilang → tutup tracklet
+TRACKLET_GAP_CYCLES    = 15       # siklus batch berturut-turut track hilang → tutup tracklet
 TRACKLET_MAX_DURATION  = 600.0    # detik — tutup paksa + buka tracklet baru dengan key sama
 TRACKLET_MAX_SAMPLES   = 16       # maks embedding disimpan per tracklet (top-K by quality)
-MIN_TRACKLET_DET       = 2        # tracklet dengan n_det < ini dibuang (tidak di-enroll/di-match)
 TRACKLET_MAX_POSITIONS = 120      # maks titik kaki disimpan per tracklet (garis lintasan/heatmap)
+# Fold fragmen tracker: di RTSP FPS rendah, 1 orang bisa dipecah jadi >1 track_id
+# yang overlap waktu di kamera SAMA. Tracklet pendek (n_det <= MAX) yang jadi NEW
+# tapi overlap waktu dgn tracklet terbuka lain (lebih panjang) di kamera sama, dan
+# embedding-nya tidak jelas beda orang (>= MIN_SIM), dilipat ke tracklet terbuka
+# itu — bukan bikin identitas terpisah. Bar SIM longgar: prior spatio-temporal kuat.
+CONCURRENT_FRAGMENT_MAX_DET = 12
+CONCURRENT_FRAGMENT_MIN_SIM = 0.52
 # ponytail: cap keras + FIFO drop titik TERTUA kalau kepenuhan — cukup buat tracklet
 # normal (detik-menit). Kalau nanti perlu path presisi untuk tracklet super panjang
 # (mendekati TRACKLET_MAX_DURATION), ganti ke downsampling merata bukan FIFO.
@@ -84,6 +93,7 @@ class Tracklet:
     best_y:     "int | None"              = None
     positions:  list                      = field(default_factory=list)  # [(x,y), ...] tiap observe(), urut waktu
     missing:    int                       = 0   # siklus batch berturut-turut tanpa track ini
+    folded_track_ids: list                = field(default_factory=list)  # track_id fragmen yang dilipat ke sini
 
 
 def par_attrs(par, crop: "np.ndarray | None") -> "dict | None":
@@ -170,9 +180,8 @@ class IdentityDB:
         ts: datetime,
     ) -> None:
         """Kumpulkan bukti untuk tracklet ini. Dipanggil tiap box per siklus
-        batch, termasuk box yang gagal quality gate (emb None) atau conf <
-        QUALITY_MIN_CONF — itu tetap menaikkan n_det dan last_seen tapi tidak
-        menambah sample."""
+        batch, termasuk box yang gagal quality gate (emb None) — itu tetap
+        menaikkan n_det dan last_seen tapi tidak menambah sample."""
         key = self._key(track_id, cam_id)
         tl = self._open.get(key)
         if tl is None:
@@ -191,7 +200,7 @@ class IdentityDB:
         if len(tl.positions) >= TRACKLET_MAX_POSITIONS:
             tl.positions.pop(0)
         tl.positions.append(foot_point_xyxy(x1, y1, x2, y2))
-        if emb is not None and conf >= QUALITY_MIN_CONF:
+        if emb is not None:
             self._add_sample(tl, emb, quality)
 
     @staticmethod
@@ -275,21 +284,52 @@ class IdentityDB:
                                 and margin >= MIN_MARGIN) else None
         return matched, best_name, best_score, second_name, second_score
 
-    def _resolve_tracklet(self, tl: Tracklet) -> "dict | None":
-        if not tl.samples or tl.n_det < MIN_TRACKLET_DET:
-            return None  # tidak ada bukti visual yang layak — buang, tidak ada POST
-
+    def _tl_mean_emb(self, tl: Tracklet) -> np.ndarray:
         mean = np.mean([e for e, _ in tl.samples], axis=0)
-        emb  = mean / (np.linalg.norm(mean) + 1e-8)
+        return mean / (np.linalg.norm(mean) + 1e-8)
+
+    def _fold_fragment_into_open(self, tl: Tracklet, emb: np.ndarray) -> bool:
+        """Fragmen tracker (lihat CONCURRENT_FRAGMENT_*): `tl` pendek & overlap
+        waktu dgn tracklet terbuka lain di kamera sama yg lebih panjang &
+        embedding-nya tidak jelas beda orang → lipat sampel+posisi ke tracklet
+        terbuka itu, return True (pemanggil buang `tl` tanpa emit identitas)."""
+        if tl.n_det > CONCURRENT_FRAGMENT_MAX_DET:
+            return False
+        for (cam, _), o in self._open.items():
+            if cam != tl.cam_id or o is tl or len(o.samples) <= len(tl.samples):
+                continue
+            if not (o.started_at <= tl.last_seen and tl.started_at <= o.last_seen):
+                continue  # tidak overlap waktu
+            if float(np.dot(emb, self._tl_mean_emb(o))) < CONCURRENT_FRAGMENT_MIN_SIM:
+                continue  # jelas beda orang
+            for s_emb, s_q in tl.samples:
+                self._add_sample(o, s_emb, s_q)
+            o.n_det += tl.n_det
+            o.positions.extend(tl.positions)
+            del o.positions[:-TRACKLET_MAX_POSITIONS]
+            o.folded_track_ids.append(tl.track_id)
+            o.folded_track_ids.extend(tl.folded_track_ids)
+            print(f"[reid] fragmen {tl.cam_id}/t{tl.track_id} ({tl.n_det} det) dilipat "
+                  f"ke tracklet terbuka t{o.track_id}")
+            return True
+        return False
+
+    def _resolve_tracklet(self, tl: Tracklet) -> "dict | None":
+        if len(tl.samples) < 3:
+            return None  # < 3 crop berkualitas — bukti visual terlalu tipis, buang (tidak ada POST)
+
+        emb = self._tl_mean_emb(tl)
 
         name, top1_name, score, top2_name, top2_score = self.associate(emb, tl)
         is_new = name is None
+        if is_new and self._fold_fragment_into_open(tl, emb):
+            return None
         if is_new:
             name, label = self._new_names(tl.cam_id)
             self._embeddings[name]       = [{"emb": emb, "last_match": tl.last_seen, "cam_id": tl.cam_id}]
             self._display_to_label[name] = label
         else:
-            self._bank_update(name, emb, tl.cam_id)
+            self._bank_update(name, emb, tl.cam_id, match_score=score)
             label = self._display_to_label.get(name, name)
 
         key = self._key(tl.track_id, tl.cam_id)
@@ -328,6 +368,7 @@ class IdentityDB:
             "positions":    tl.positions,
             "embedding":    emb,
             "assoc_score":  score,
+            "folded_track_ids": tl.folded_track_ids,
             # PAR (Fase 3) TIDAK dihitung di sini — ~2.3s/crop akan menahan
             # thread inferensi utama untuk SEMUA kamera. par_attrs() dipanggil
             # nanti di worker background _PostQueue (backend_client.py).
@@ -335,7 +376,7 @@ class IdentityDB:
         }
 
 
-    def _bank_update(self, name: str, emb: np.ndarray, cam_id: str) -> None:
+    def _bank_update(self, name: str, emb: np.ndarray, cam_id: str, *, match_score: float = 1.0) -> None:
         # Aware UTC — harus konsisten dengan started_at/ended_at yang dipakai
         # associate()/load_gallery(), kalau tidak prune_banks() crash saat
         # membandingkan entry lokal (naive) dengan entry hasil load_gallery (aware).
@@ -350,6 +391,9 @@ class IdentityDB:
         if best_sim >= BANK_MERGE_SIM:
             merged = 0.9 * bank[best_idx]["emb"] + 0.1 * emb
             bank[best_idx]["emb"]        = merged / (np.linalg.norm(merged) + 1e-8)
+            bank[best_idx]["last_match"] = now
+        elif match_score < BANK_EXPAND_MIN:
+            # match tipis → jangan ekspansi bank, cukup jaga entry terdekat tetap fresh
             bank[best_idx]["last_match"] = now
         else:
             new_entry = {"emb": emb, "last_match": now, "cam_id": cam_id}

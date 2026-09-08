@@ -18,6 +18,7 @@ thumbnails/
 sample/
 sample copy/
 sample3/
+predictions_runs_current/
 
 # macOS
 .DS_Store
