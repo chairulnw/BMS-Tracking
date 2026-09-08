@@ -38,11 +38,7 @@ PREDICTIONS_CSV   = Path("predictions.csv")  # log prediksi mode file-playback, 
 
 # Ukuran input YOLO (default ultralytics 640). Turunin → deteksi lebih cepat,
 # tapi orang kecil/jauh lebih sering ke-miss. Env override buat tuning.
-DETECT_IMGSZ = int(os.getenv("DETECT_IMGSZ", "480"))
-# Ekstraksi embedding ReID cuma jalan 1x tiap N siklus per track (tracklet
-# cuma nyimpan 16 sampel terbaik — ekstrak tiap frame itu mubazir & jadi
-# bottleneck FPS pas rame). observe() tetap dipanggil tiap siklus.
-REID_EVERY_N = int(os.getenv("REID_EVERY_N", "3"))
+DETECT_IMGSZ = int(os.getenv("DETECT_IMGSZ", "640"))
 
 
 class _OCSortAdapter:
@@ -196,7 +192,6 @@ class BatchProcessor:
         self._file_slots_done:   set[str]               = set()  # slot playlist yang sudah selesai
         self._thread: threading.Thread | None = None
         self._offline_reported: set[str]      = set()  # kamera yang sudah dilaporkan offline
-        self._reid_tick: dict[tuple[str, int], int] = {}  # (cam,track) → hitungan siklus, buat throttle ReID
         # System Health (plan2/spesifikasi.md Fase 2) — waktu predict() batch
         # terakhir, buat tahu kapan BatchProcessor mulai jadi bottleneck.
         self._batch_ms: "deque[float]" = deque(maxlen=50)
@@ -276,7 +271,6 @@ class BatchProcessor:
                         self._finalize_tracklets(closed)
                     self._slots[0].db.prune_banks()
                     self._slots[0].db.reset()
-                    self._reid_tick.clear()
                     for slot in self._slots:
                         slot._side_hist.clear()
                         slot._last_dir.clear()
@@ -393,22 +387,11 @@ class BatchProcessor:
                             x1, y1, x2, y2 = int(t[0]), int(t[1]), int(t[2]), int(t[3])
                             track_id = int(t[4])
                             conf_val = float(t[5])
-                            # Throttle: ekstrak embedding cuma 1x tiap REID_EVERY_N
-                            # siklus per track, dan stop total kalau tracklet-nya
-                            # sudah punya 16 sampel. observe() di bawah tetap jalan
-                            # tiap siklus (emb None) buat n_det + titik lintasan +
-                            # best_crop.
-                            tkey = (slot.camera_id, track_id)
-                            tick = self._reid_tick.get(tkey, 0)
-                            self._reid_tick[tkey] = tick + 1
-                            emb, quality = None, 0.0
-                            if tick % REID_EVERY_N == 0 and not slot.db.samples_full(slot.camera_id, track_id):
-                                _reid_t0 = time.perf_counter()
-                                result   = _extract_embedding(self._extractor, frame, x1, y1, x2, y2,
-                                                              track_id=track_id, cam_id=slot.camera_id)
-                                reid_ms += (time.perf_counter() - _reid_t0) * 1000
-                                if result is not None:
-                                    emb, quality = result
+                            _reid_t0 = time.perf_counter()
+                            result   = _extract_embedding(self._extractor, frame, x1, y1, x2, y2,
+                                                          track_id=track_id, cam_id=slot.camera_id)
+                            reid_ms += (time.perf_counter() - _reid_t0) * 1000
+                            emb, quality = result if result is not None else (None, 0.0)
                             per_box.append((track_id, conf_val, x1, y1, x2, y2, emb, quality))
 
                     active_tids = {tid for tid, *_ in per_box}
@@ -425,11 +408,6 @@ class BatchProcessor:
                                         frame, x1, y1, x2, y2, ts_now)
 
                     slot.db.update_active(slot.camera_id, active_tids)
-                    # Buang tick track yang sudah tidak aktif di kamera ini
-                    # (track hilang → tracklet ditutup / track_id didaur ulang).
-                    for k in [k for k in self._reid_tick
-                              if k[0] == slot.camera_id and k[1] not in active_tids]:
-                        del self._reid_tick[k]
                     closed = slot.db.close_expired(slot.camera_id, ts_now)
                     matching_ms = (time.perf_counter() - _match_t0) * 1000
                     if closed:

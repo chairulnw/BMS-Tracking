@@ -209,7 +209,7 @@ CREATE TABLE IF NOT EXISTS tracklets (
     ended_at           TIMESTAMPTZ NOT NULL,
     n_detections       INTEGER     NOT NULL,
     best_thumbnail_url TEXT,
-    embedding          vector(3840),  -- rata-rata top-K crop terbaik, L2-normalized (TransReID ViT-B/16, 768*5)
+    embedding          vector,        -- rata-rata top-K crop terbaik, L2-normalized. Unbounded: dimensinya model-specific (OSNet 512, TransReID 3840, BoT-ResNet50 2048)
     assoc_score        REAL,
     attrs              JSONB,         -- diisi Fase 3 (atribut PAR)
     pos_x              INTEGER,       -- titik kaki (foot point) sampel ber-confidence tertinggi (fallback lama),
@@ -222,25 +222,27 @@ ALTER TABLE tracklets ADD COLUMN IF NOT EXISTS pos_x INTEGER;
 ALTER TABLE tracklets ADD COLUMN IF NOT EXISTS pos_y INTEGER;
 ALTER TABLE tracklets ADD COLUMN IF NOT EXISTS positions JSONB;
 
--- Migrasi OSNet (512-dim) -> TransReID (3840-dim, Subbab Analisis Pemilihan
--- Solusi). Embedding lama tidak bisa dikonversi dimensinya, jadi diset NULL
--- (galeri identitas dibangun ulang dari nol memakai TransReID).
--- ivfflat/hnsw pgvector cuma dukung index sampai 2000 dimensi — embedding
--- TransReID (3840) di atas itu, jadi index lama HARUS didrop dulu sebelum
--- ALTER, dan TIDAK bisa diganti index sejenis sesudahnya (lihat komentar di
--- bawah CREATE INDEX person_started). Search similarity jalan pakai exact
--- scan (cukup di volume data saat ini, lihat ponytail note di bawah).
+-- Embedding Re-ID dimensinya model-specific (OSNet 512, TransReID 3840,
+-- BoT-ResNet50 2048). Kolomnya unbounded `vector` supaya ganti model Re-ID
+-- tidak perlu ALTER lagi. Migrasi lama vector(3840) -> unbounded: isi
+-- di-NULL-kan (dimensi tak bisa dikonversi, galeri dibangun ulang dari nol).
+--   Ganti model Re-ID? NULL-kan galeri lama:
+--   psql -d bms_tracking -c 'UPDATE tracklets SET embedding = NULL;'
+-- ivfflat/hnsw pgvector cuma dukung index <=2000 dim, jadi tidak ada index
+-- di embedding — similarity search di /people jalan exact scan.
 DROP INDEX IF EXISTS idx_tracklets_embedding;
 
+-- pgvector menyimpan dimensi di atttypmod (-1 = unbounded), bukan di
+-- character_maximum_length (selalu NULL untuk vector).
 DO $$
 BEGIN
     IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_name = 'tracklets' AND column_name = 'embedding'
-          AND udt_name = 'vector' AND character_maximum_length IS NULL
+        SELECT 1 FROM pg_attribute
+        WHERE attrelid = 'tracklets'::regclass AND attname = 'embedding'
+          AND atttypmod <> -1
     ) THEN
         UPDATE tracklets SET embedding = NULL;
-        ALTER TABLE tracklets ALTER COLUMN embedding TYPE vector(3840);
+        ALTER TABLE tracklets ALTER COLUMN embedding TYPE vector;
     END IF;
 END $$;
 

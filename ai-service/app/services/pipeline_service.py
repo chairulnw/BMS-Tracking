@@ -34,8 +34,7 @@ BUFFER_FRAMES      = 10
 NEAR_LINE_DIST     = 40
 MIN_CROP_PX        = 32
 MIN_MARGIN         = 0.025   # gap minimum top1-top2 untuk confident match
-STRONG_MATCH       = 0.85   # skor top1 >= ini: langsung match, lewati gate margin
-MAX_BANK_SIZE      = 2      # maks entry per identitas di bank embedding
+MAX_BANK_SIZE      = 5      # maks entry per identitas di bank embedding
 BANK_MERGE_SIM     = 0.90   # sim >= ini → update entry lama, bukan tambah baru
 BANK_STALE_HOURS   = 6.0    # entry yang tidak jadi top-match selama N jam → kandidat pruning
 QUALITY_MIN_H      = 100
@@ -60,10 +59,8 @@ def _debug_reid() -> bool:
 # default reid_threshold di ProcessVideoRequest/StreamStartRequest).
 TRACKLET_GAP_CYCLES    = 20       # siklus batch berturut-turut track hilang → tutup tracklet
 TRACKLET_MAX_DURATION  = 600.0    # detik — tutup paksa + buka tracklet baru dengan key sama
-TRACKLET_MAX_SAMPLES   = 16       # maks embedding disimpan per tracklet (top-K by ketajaman*conf)
-MIN_TRACKLET_DET       = 2        # tracklet dengan n_det < ini dibuang (tidak di-enroll/di-match).
-                                  # Fragmen 1-deteksi = embedding 1 crop noisy → jadi sumber
-                                  # identitas sampah (contoh: Unknown #3 lahir dari tracklet n_det=1).
+TRACKLET_MAX_SAMPLES   = 16       # maks embedding disimpan per tracklet (top-K by quality)
+MIN_TRACKLET_DET       = 2        # tracklet dengan n_det < ini dibuang (tidak di-enroll/di-match)
 TRACKLET_MAX_POSITIONS = 120      # maks titik kaki disimpan per tracklet (garis lintasan/heatmap)
 # ponytail: cap keras + FIFO drop titik TERTUA kalau kepenuhan — cukup buat tracklet
 # normal (detik-menit). Kalau nanti perlu path presisi untuk tracklet super panjang
@@ -195,27 +192,18 @@ class IdentityDB:
             tl.positions.pop(0)
         tl.positions.append(foot_point_xyxy(x1, y1, x2, y2))
         if emb is not None and conf >= QUALITY_MIN_CONF:
-            self._add_sample(tl, emb, quality, conf)
+            self._add_sample(tl, emb, quality)
 
     @staticmethod
-    def _add_sample(tl: Tracklet, emb: np.ndarray, quality: float, conf: float = 1.0) -> None:
-        # Skor sampel = ketajaman (Laplacian var) * confidence deteksi YOLO.
-        # Box tajam tapi conf rendah (deteksi ragu / box meleset) tidak lagi
-        # menang atas box conf tinggi hanya karena kebetulan lebih tajam.
-        score = quality * conf
+    def _add_sample(tl: Tracklet, emb: np.ndarray, quality: float) -> None:
+        # Top-K by quality (Laplacian var): kalau penuh, ganti sample terburuk
+        # bila yang baru lebih tajam.
         if len(tl.samples) < TRACKLET_MAX_SAMPLES:
-            tl.samples.append((emb, score))
+            tl.samples.append((emb, quality))
             return
         worst_idx = min(range(len(tl.samples)), key=lambda i: tl.samples[i][1])
-        if score > tl.samples[worst_idx][1]:
-            tl.samples[worst_idx] = (emb, score)
-
-    def samples_full(self, cam_id: str, track_id: int) -> bool:
-        """True kalau tracklet terbuka ini sudah punya TRACKLET_MAX_SAMPLES
-        sampel — dipakai batch_processor untuk berhenti ekstraksi ReID pada
-        track yang sudah cukup ter-sampel (hemat FPS pada tracklet panjang)."""
-        tl = self._open.get(self._key(track_id, cam_id))
-        return tl is not None and len(tl.samples) >= TRACKLET_MAX_SAMPLES
+        if quality > tl.samples[worst_idx][1]:
+            tl.samples[worst_idx] = (emb, quality)
 
     def update_active(self, cam_id: str, track_ids: "set[int]") -> None:
         """Dipanggil tiap siklus batch. Update tracklet mana yang masih 'hidup'
@@ -261,31 +249,31 @@ class IdentityDB:
 
     # ── Asosiasi ─────────────────────────────────────────────────────────────
 
-    def associate(self, emb: np.ndarray, tl: Tracklet) -> tuple["str | None", float]:
+    def associate(self, emb: np.ndarray, tl: Tracklet) -> tuple["str | None", "str | None", float, "str | None", float]:
         """score = cosine similarity murni terhadap bank embedding tiap orang.
+        Return: (match_atau_None, top1_name, top1_score, top2_name, top2_score).
+        match None kalau top1 < threshold atau margin top1-top2 < MIN_MARGIN.
         ponytail: hard constraint interval-overlap (dua tracklet beririsan
         waktu di kamera sama tidak pernah dianggap orang yang sama) dicabut
         atas permintaan eksplisit — sekarang murni threshold+margin di bawah,
         gak ada guard lain. Konsekuensi yang sudah didiskusikan: dua orang
         beda yang crossing berdekatan bisa ke-gabung jadi satu identitas."""
         best_name, best_score = None, -1.0
-        second_score = -1.0
+        second_name, second_score = None, -1.0
         for name, bank in self._embeddings.items():
             score = max(float(np.dot(emb, e["emb"])) for e in bank)
             if _debug_reid():
                 print(f"[assoc.cmp] {tl.cam_id}/t{tl.track_id} vs {name!r}: cos={score:.3f}")
             if score > best_score:
-                second_score = best_score
+                second_name, second_score = best_name, best_score
                 best_score, best_name = score, name
             elif score > second_score:
-                second_score = score
+                second_name, second_score = name, score
 
         margin = best_score - second_score
-        if best_name is not None and best_score >= self.threshold and (
-            best_score >= STRONG_MATCH or margin >= MIN_MARGIN
-        ):
-            return best_name, best_score
-        return None, best_score
+        matched = best_name if (best_name is not None and best_score >= self.threshold
+                                and margin >= MIN_MARGIN) else None
+        return matched, best_name, best_score, second_name, second_score
 
     def _resolve_tracklet(self, tl: Tracklet) -> "dict | None":
         if not tl.samples or tl.n_det < MIN_TRACKLET_DET:
@@ -294,7 +282,7 @@ class IdentityDB:
         mean = np.mean([e for e, _ in tl.samples], axis=0)
         emb  = mean / (np.linalg.norm(mean) + 1e-8)
 
-        name, score = self.associate(emb, tl)
+        name, top1_name, score, top2_name, top2_score = self.associate(emb, tl)
         is_new = name is None
         if is_new:
             name, label = self._new_names(tl.cam_id)
@@ -309,14 +297,18 @@ class IdentityDB:
         self._name_to_owner[name] = key
 
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        margin = score - top2_score
+        # top1/top2 = kandidat terdekat di galeri + skor cosine-nya; margin = selisihnya.
+        cand = (f"top1={top1_name!r}:{score:.3f} top2={top2_name!r}:{top2_score:.3f} "
+                f"margin={margin:.3f}")
         # score >= threshold tapi tetap NEW berarti ditolak gate margin (MIN_MARGIN),
         # bukan skor kurang — dua kandidat teratas terlalu dekat untuk dipercaya.
         if is_new and score >= self.threshold:
-            reason = f"score={score:.3f} >= thr (<{STRONG_MATCH}), margin top1/top2 < {MIN_MARGIN}"
+            reason = f"{cand} → margin < {MIN_MARGIN}, tolak"
         elif is_new:
-            reason = f"score={score:.3f} < thr={self.threshold} (atau gallery kosong)"
+            reason = f"{cand} → top1 < thr={self.threshold} (atau gallery kosong)"
         else:
-            reason = f"score={score:.3f}"
+            reason = cand
         print(f"[reid] {ts} {tl.cam_id}/t{tl.track_id} tracklet ditutup ({tl.n_det} det, {len(tl.samples)} sample) "
               f"→ {'NEW' if is_new else 'MATCH'} {name!r}  ({reason})")
 

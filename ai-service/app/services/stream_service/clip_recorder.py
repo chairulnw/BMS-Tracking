@@ -2,6 +2,7 @@
 prediksi untuk mode file-playback (dibandingkan dengan ground truth)."""
 
 import csv
+import os
 import threading
 import time
 from collections import deque
@@ -17,6 +18,8 @@ MAX_FRAME_GAP  = 3.0   # detik — jeda nyata antar frame lebih dari ini (mis. m
                         # klip yang lagi jalan, jangan biarkan durasinya melar
                         # mencakup waktu nunggu itu (lihat clip "slow motion")
 CLIPS_DIR      = Path("output/clips")
+# 1 → klip direkam dengan overlay bounding box + label track/nama; 0 → frame mentah.
+CLIP_BBOX_OVERLAY = os.getenv("CLIP_BBOX_OVERLAY", "0").lower() not in ("0", "false", "no", "")
 
 _CLIP_STOP = object()  # sentinel: finalize clip saat ganti file sumber
 
@@ -131,8 +134,7 @@ class ClipRecorder:
             self._last_update_at = now
 
             self._frame_times.append(now)
-            # draw = self._draw(frame, annotations) if annotations else frame  # BBOX_OVERLAY
-            draw = frame
+            draw = self._draw(frame, annotations) if (CLIP_BBOX_OVERLAY and annotations) else frame
             if not self._is_glitch(frame):
                 self._last_valid = draw
 
