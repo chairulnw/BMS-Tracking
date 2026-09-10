@@ -14,11 +14,15 @@ venv/
 
 # Output video
 output/
+output/clips_web/   # cache MP4 transcode-on-request (ditulis backend, di-prune ai-service retention.py)
 thumbnails/
 sample/
 sample copy/
 sample3/
+sample_0904/
 predictions_runs_current/
 
 # macOS
 .DS_Store
+# Runtime logs
+*.log

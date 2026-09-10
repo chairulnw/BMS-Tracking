@@ -34,18 +34,21 @@ BUFFER_FRAMES      = 10
 NEAR_LINE_DIST     = 40
 MIN_CROP_PX        = 32
 MIN_MARGIN         = 0.04   # gap minimum top1-top2 untuk confident match
+SEED_MIN_COHERENCE = 0.35   # tracklet yang mau jadi identitas BARU: cosine PAIRWISE
+                            # TERENDAH antar sample-nya harus >= ini. Rendah = ada
+                            # sample yang jauh dari yang lain (box kadang isi 2 orang /
+                            # occlusion berat) → embedding mean degenerate → kalau jadi
+                            # bibit jadi "magnet". Angka aktual muncul di log [reid],
+                            # tune dari situ.
 MAX_BANK_SIZE      = 5      # maks entry per identitas di bank embedding
 BANK_MERGE_SIM     = 0.90   # sim >= ini → update entry lama, bukan tambah baru
 BANK_EXPAND_MIN    = 0.67   # skor match tracklet < ini → JANGAN tambah prototipe bank baru,
-                            # cukup touch. Hanya blokir match yang NYARIS threshold
-                            # (~0.65-0.67) — itu yang sering bawa embedding generik/
-                            # terkontaminasi & bikin identitas jadi "magnet" (Unknown #1).
-                            # Di atas 0.67 = match normal, boleh bangun keragaman view bank.
 BANK_STALE_HOURS   = 6.0    # entry yang tidak jadi top-match selama N jam → kandidat pruning
 QUALITY_MIN_H      = 80     # tinggi crop minimum (px)
 QUALITY_MIN_W      = 40     # lebar crop minimum (px)
 QUALITY_MIN_RATIO  = 1.8    # min h/w — person portrait aspect ratio
 QUALITY_LAP_VAR    = 100.0  # min Laplacian variance — blur gate
+SAMPLE_MIN_CONF    = 0.62   # conf YOLO minimum buat sebuah box jadi SAMPLE embedding.
 
 DEBUG_CROPS_DIR = Path("debug_crops")
 
@@ -180,8 +183,10 @@ class IdentityDB:
         ts: datetime,
     ) -> None:
         """Kumpulkan bukti untuk tracklet ini. Dipanggil tiap box per siklus
-        batch, termasuk box yang gagal quality gate (emb None) — itu tetap
-        menaikkan n_det dan last_seen tapi tidak menambah sample."""
+        batch, termasuk box yang gagal quality gate (emb None) atau conf <
+        SAMPLE_MIN_CONF — itu tetap menaikkan n_det, last_seen, titik lintasan
+        tapi TIDAK menambah sample embedding (conf ganda: 0.45 buat deteksi+
+        tracking+rekam, 0.66 buat bukti identitas)."""
         key = self._key(track_id, cam_id)
         tl = self._open.get(key)
         if tl is None:
@@ -200,7 +205,7 @@ class IdentityDB:
         if len(tl.positions) >= TRACKLET_MAX_POSITIONS:
             tl.positions.pop(0)
         tl.positions.append(foot_point_xyxy(x1, y1, x2, y2))
-        if emb is not None:
+        if emb is not None and conf >= SAMPLE_MIN_CONF:
             self._add_sample(tl, emb, quality)
 
     @staticmethod
@@ -314,9 +319,20 @@ class IdentityDB:
             return True
         return False
 
+    @staticmethod
+    def _sample_coherence(tl: Tracklet) -> float:
+        """Cosine PAIRWISE terendah antar sample embedding tracklet. Rendah = ada
+        sample yang beda jauh dari yang lain → box kadang isi 2 orang / occlusion
+        berat → embedding mean degenerate. (mean-cosine-ke-mean punya floor ~0.7
+        walau kontaminasi 50/50, pairwise-min rentangnya penuh 0..1.)"""
+        E = np.stack([e for e, _ in tl.samples])
+        sims = E @ E.T
+        n = len(E)
+        return float(sims[np.triu_indices(n, k=1)].min()) if n > 1 else 1.0
+
     def _resolve_tracklet(self, tl: Tracklet) -> "dict | None":
-        if len(tl.samples) < 3:
-            return None  # < 3 crop berkualitas — bukti visual terlalu tipis, buang (tidak ada POST)
+        if len(tl.samples) < 5:
+            return None  # < 5 crop berkualitas — bukti visual terlalu tipis, buang (tidak ada POST)
 
         emb = self._tl_mean_emb(tl)
 
@@ -325,6 +341,13 @@ class IdentityDB:
         if is_new and self._fold_fragment_into_open(tl, emb):
             return None
         if is_new:
+            coh = self._sample_coherence(tl)
+            if coh < SEED_MIN_COHERENCE:
+                ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                print(f"[reid] {ts} {tl.cam_id}/t{tl.track_id} tracklet ditutup "
+                      f"({tl.n_det} det, {len(tl.samples)} sample) → BUANG "
+                      f"(koherensi sample {coh:.2f} < {SEED_MIN_COHERENCE}, embedding terkontaminasi — cegah magnet)")
+                return None
             name, label = self._new_names(tl.cam_id)
             self._embeddings[name]       = [{"emb": emb, "last_match": tl.last_seen, "cam_id": tl.cam_id}]
             self._display_to_label[name] = label
@@ -349,7 +372,8 @@ class IdentityDB:
             reason = f"{cand} → top1 < thr={self.threshold} (atau gallery kosong)"
         else:
             reason = cand
-        print(f"[reid] {ts} {tl.cam_id}/t{tl.track_id} tracklet ditutup ({tl.n_det} det, {len(tl.samples)} sample) "
+        coh_str = f", koh={self._sample_coherence(tl):.2f}" if is_new else ""
+        print(f"[reid] {ts} {tl.cam_id}/t{tl.track_id} tracklet ditutup ({tl.n_det} det, {len(tl.samples)} sample{coh_str}) "
               f"→ {'NEW' if is_new else 'MATCH'} {name!r}  ({reason})")
 
         return {

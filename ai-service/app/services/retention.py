@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 CLIPS_DIR      = Path("output/clips")
+CLIPS_WEB_DIR  = Path("output/clips_web")  # cache MP4 transcode-on-request (ditulis backend)
 THUMBNAILS_DIR = Path("thumbnails")  # termasuk thumbnails/events/ (rglob)
 
 RETENTION_DAYS         = float(os.getenv("RETENTION_DAYS", "30"))
@@ -36,7 +37,7 @@ def cleanup_once(
     """Hapus file lebih tua dari `retention_days`, lalu — kalau total ukuran
     `dirs` masih di atas `max_storage_gb` — hapus file terlama sampai di
     bawah batas. Return jumlah file yang dihapus."""
-    dirs = dirs if dirs is not None else [CLIPS_DIR, THUMBNAILS_DIR]
+    dirs = dirs if dirs is not None else [CLIPS_DIR, CLIPS_WEB_DIR, THUMBNAILS_DIR]
     removed = 0
     now = time.time()
     max_age_s = retention_days * 86400

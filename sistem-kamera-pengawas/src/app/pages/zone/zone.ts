@@ -14,7 +14,6 @@ import { AuthUrlPipe } from '../../pipes/auth-url.pipe';
 import { environment } from '../../../environments/environment';
 
 const API = environment.apiBaseUrl;
-const AI  = environment.aiServiceBaseUrl;
 
 type ZoneType = 'line' | 'polygon';
 
@@ -321,8 +320,9 @@ export class ZonePage implements OnInit {
   playClip(ev: ZoneEvent): void {
     if (!ev.camera_id) return;
     this.clipError       = false;
-    this.playingClip    = ev;
-    this.playingClipUrl = `${AI}/clips/${ev.camera_id}?timestamp=${encodeURIComponent(ev.timestamp)}`;
+    this.playingClip     = ev;
+    // Backend sudah motong klip ke jendela sekitar momen event (bukan scene utuh).
+    this.playingClipUrl = `${API}/clips/${ev.camera_id}?timestamp=${encodeURIComponent(ev.timestamp)}`;
   }
 
   onClipError(): void {

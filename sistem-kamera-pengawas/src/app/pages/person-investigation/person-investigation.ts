@@ -415,7 +415,8 @@ export class PersonInvestigation implements OnInit {
     const token  = this.auth.getToken();
     const params = new URLSearchParams({ timestamp });
     if (token) params.set('token', token);
-    this.footageUrl = `${AI_API}/clips/${cameraId}?${params}`;
+    // Backend sudah motong klip ke jendela sekitar momen event (bukan scene utuh).
+    this.footageUrl = `${API}/clips/${cameraId}?${params}`;
   }
 
   closeFootage(): void {

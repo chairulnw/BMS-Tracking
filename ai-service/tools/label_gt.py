@@ -43,7 +43,9 @@ from pathlib import Path
 import cv2
 from ultralytics import YOLO
 
-GT_DIR    = Path("sample")
+# Folder dataset: default "sample/", atau argumen pertama (mis. "sample_0904").
+# Isinya subfolder per kamera (c8/, c9/, ... atau c8_sim/, dst) berisi .avi.
+GT_DIR    = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("sample")
 OUT_CSV   = GT_DIR / "output.csv"
 YOLO_PATH = "checkpoints/yolo26n.pt"
 SAMPLE_INTERVAL_SEC = 1.0   # jarak waktu antar frame yang ditampilkan buat dilabel

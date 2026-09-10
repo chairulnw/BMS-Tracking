@@ -24,7 +24,7 @@ builtins.print = _print_with_ts
 import threading
 
 from app.auth import get_current_user
-from app.routers import clips, health, identities, snapshot, stream, video
+from app.routers import health, identities, snapshot, stream, video
 from app.schemas import DEFAULT_CONF_THRESHOLD, ASSOC_THRESHOLD
 from app.services import retention
 from app.services.stream_service import StreamManager
@@ -117,4 +117,3 @@ app.include_router(video.router, dependencies=[Depends(get_current_user)])
 app.include_router(identities.router, dependencies=[Depends(get_current_user)])
 app.include_router(stream.router, dependencies=[Depends(get_current_user)])
 app.include_router(snapshot.router, dependencies=[Depends(get_current_user)])
-app.include_router(clips.router, dependencies=[Depends(get_current_user)])

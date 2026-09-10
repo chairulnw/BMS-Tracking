@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 
-DEFAULT_CONF_THRESHOLD = 0.6
-ASSOC_THRESHOLD        = 0.65
+DEFAULT_CONF_THRESHOLD = 0.47
+ASSOC_THRESHOLD        = 0.66
 
 class LineConfig(BaseModel):
     p1: tuple[int, int]

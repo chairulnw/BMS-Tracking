@@ -11,7 +11,7 @@ load_dotenv()
 
 from app.auth import get_current_user
 from app.retention import start_background as start_db_retention
-from app.routers import auth, camera_events, cameras, detections, people, persons, thumbnails, tracklets, zones
+from app.routers import auth, camera_events, cameras, clips, detections, people, persons, thumbnails, tracklets, zones
 
 
 async def _init_connection(conn: asyncpg.Connection) -> None:
@@ -54,6 +54,7 @@ app.include_router(auth.router)
 app.include_router(persons.router, dependencies=[Depends(get_current_user)])
 app.include_router(detections.router, dependencies=[Depends(get_current_user)])
 app.include_router(thumbnails.router, dependencies=[Depends(get_current_user)])
+app.include_router(clips.router, dependencies=[Depends(get_current_user)])
 app.include_router(cameras.router, dependencies=[Depends(get_current_user)])
 app.include_router(camera_events.router, dependencies=[Depends(get_current_user)])
 app.include_router(zones.router, dependencies=[Depends(get_current_user)])

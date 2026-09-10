@@ -23,7 +23,7 @@ from ultralytics.trackers.byte_tracker import BYTETracker
 from ultralytics.utils import IterableSimpleNamespace, YAML
 from ultralytics.utils.checks import check_yaml
 
-from app.services.geometry import cross_side
+from app.services.geometry import cross_side, within_segment_span
 from app.services.pipeline_service import _extract_embedding
 from app.services.stream_service.backend_client import _BackendClient, _fetch_zones
 from app.services.stream_service.cam_slot import _CamSlot
@@ -39,6 +39,36 @@ PREDICTIONS_CSV   = Path("predictions.csv")  # log prediksi mode file-playback, 
 # Ukuran input YOLO (default ultralytics 640). Turunin → deteksi lebih cepat,
 # tapi orang kecil/jauh lebih sering ke-miss. Env override buat tuning.
 DETECT_IMGSZ = int(os.getenv("DETECT_IMGSZ", "640"))
+# Frame dengan rata-rata brightness < ini dilewati (tidak di-detect / track).
+# Malam / feed terlalu gelap cuma bikin deteksi noise → tracklet sampah.
+# 0 = matikan gate. Naikin kalau feed IR malam masih ikut ke-proses.
+DARK_MEAN = float(os.getenv("DARK_MEAN", "40"))
+# Box track yang ke-overlap box lain > fraksi ini (relatif ke box terkecil)
+# = ketutupan / berdempet → crop-nya isi >1 orang → embedding-nya di-skip.
+OCCLUSION_FRAC = float(os.getenv("OCCLUSION_FRAC", "0.45"))
+# Rekam tetap jalan selama masih ada track yang HILANG < N frame lalu (ByteTrack
+# lost_stracks). Orang masih di sana, YOLO cuma kedip. Cuma nyentuh flag rekam,
+# nggak masukin box prediksi ke pipeline identitas.
+REC_COAST_FRAMES = int(os.getenv("REC_COAST_FRAMES", "20"))
+# Track yang box centroid-nya bergerak < STATIC_PX selama STATIC_WINDOW_S detik
+# dianggap DIAM (orang duduk santai / objek) → nggak nyumbang ke flag rekam.
+# Recorder cooldown kalau SEMUA track diam. Rekam lagi begitu ada yang gerak.
+STATIC_PX       = float(os.getenv("REC_STATIC_PX", "28"))
+STATIC_WINDOW_S = float(os.getenv("REC_STATIC_WINDOW_S", "4.0"))
+
+
+def _overlap_frac(a: tuple, b: tuple) -> float:
+    """Luas irisan a∩b dibagi luas box TERKECIL. Nangkep 'box kecil di dalam
+    box besar' yang IoU-nya kelewatan (union kegedean)."""
+    ix = max(0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    if inter == 0:
+        return 0.0
+    area_a = (a[2] - a[0]) * (a[3] - a[1])
+    area_b = (b[2] - b[0]) * (b[3] - b[1])
+    m = min(area_a, area_b)
+    return inter / m if m > 0 else 0.0
 
 
 class _OCSortAdapter:
@@ -189,6 +219,9 @@ class BatchProcessor:
         self._file_slots_done:   set[str]               = set()  # slot playlist yang sudah selesai
         self._thread: threading.Thread | None = None
         self._offline_reported: set[str]      = set()  # kamera yang sudah dilaporkan offline
+        # (cam,track) → deque[(t, cx, cy)] centroid box — buat deteksi track diam
+        # (orang duduk santai) supaya nggak bikin recorder rekam nonstop.
+        self._motion_hist: "dict[tuple[str,int], deque]" = {}
         # System Health (plan2/spesifikasi.md Fase 2) — waktu predict() batch
         # terakhir, buat tahu kapan BatchProcessor mulai jadi bottleneck.
         self._batch_ms: "deque[float]" = deque(maxlen=50)
@@ -268,6 +301,7 @@ class BatchProcessor:
                         self._finalize_tracklets(closed)
                     self._slots[0].db.prune_banks()
                     self._slots[0].db.reset()
+                    self._motion_hist.clear()
                     for slot in self._slots:
                         slot._side_hist.clear()
                         slot._last_dir.clear()
@@ -322,6 +356,12 @@ class BatchProcessor:
                     frame, slot.last_decode_ms, slot.last_source_clip, slot.last_local_frame = frame
 
                     slot.last_frame = frame
+                    if DARK_MEAN > 0 and float(frame.mean()) < DARK_MEAN:
+                        # terlalu gelap — lewati deteksi/tracking, jangan bikin
+                        # tracklet dari noise. Recorder tetap dapat frame sendiri.
+                        batch_frames.append(frame)
+                        has_new.append(False)
+                        continue
                     batch_frames.append(frame)
                     has_new.append(True)
 
@@ -380,15 +420,24 @@ class BatchProcessor:
                         _track_t0 = time.perf_counter()
                         tracks = slot.tracker.update(det, frame)
                         tracking_ms = (time.perf_counter() - _track_t0) * 1000
-                        for t in tracks:
-                            x1, y1, x2, y2 = int(t[0]), int(t[1]), int(t[2]), int(t[3])
+                        tboxes = [(int(t[0]), int(t[1]), int(t[2]), int(t[3])) for t in tracks]
+                        for i, t in enumerate(tracks):
+                            x1, y1, x2, y2 = tboxes[i]
                             track_id = int(t[4])
                             conf_val = float(t[5])
-                            _reid_t0 = time.perf_counter()
-                            result   = _extract_embedding(self._extractor, frame, x1, y1, x2, y2,
-                                                          track_id=track_id, cam_id=slot.camera_id)
-                            reid_ms += (time.perf_counter() - _reid_t0) * 1000
-                            emb, quality = result if result is not None else (None, 0.0)
+                            # Occlusion: box track ini ketutupan / berdempet box lain
+                            # di frame yang sama → crop-nya isi 2 orang → jangan
+                            # sampel embedding (cegah kontaminasi & magnet).
+                            occluded = any(_overlap_frac(tboxes[i], tboxes[j]) > OCCLUSION_FRAC
+                                           for j in range(len(tboxes)) if j != i)
+                            emb, quality = None, 0.0
+                            if not occluded:
+                                _reid_t0 = time.perf_counter()
+                                result   = _extract_embedding(self._extractor, frame, x1, y1, x2, y2,
+                                                              track_id=track_id, cam_id=slot.camera_id)
+                                reid_ms += (time.perf_counter() - _reid_t0) * 1000
+                                if result is not None:
+                                    emb, quality = result
                             per_box.append((track_id, conf_val, x1, y1, x2, y2, emb, quality))
 
                     active_tids = {tid for tid, *_ in per_box}
@@ -441,6 +490,14 @@ class BatchProcessor:
                                         continue
                                     hist.append(side)
                                     if len(hist) >= 2 and hist[-2] * hist[-1] < 0:
+                                        # Cuma hitung kalau orang beneran lewat DI RUAS garis,
+                                        # bukan perpanjangannya (cross_side = garis tak-hingga).
+                                        if not within_segment_span(
+                                            fx, fy,
+                                            seg["p1"]["x"], seg["p1"]["y"],
+                                            seg["p2"]["x"], seg["p2"]["y"],
+                                        ):
+                                            continue
                                         direction = "IN" if side * seg.get("in_sign", 1) > 0 else "OUT"
                                         # Hysteresis: arah sama berturut-turut diabaikan
                                         if slot._last_dir.get(key) == direction:
@@ -494,11 +551,40 @@ class BatchProcessor:
                                     person_label=person_label,
                                 )
 
-                    # Clip state diupdate di sini; frame ditulis oleh _recorder_loop
-                    slot._rec_has_person = n_raw > 0
+                    # Clip state diupdate di sini; frame ditulis oleh _recorder_loop.
+                    # recent_lost: track ByteTrack yang baru hilang < REC_COAST_FRAMES
+                    # frame lalu — orang kemungkinan masih ada, YOLO cuma kedip.
+                    _tr = slot.tracker
+                    recent_lost = any(
+                        getattr(_tr, "frame_id", 0) - getattr(t, "end_frame", 0) <= REC_COAST_FRAMES
+                        for t in getattr(_tr, "lost_stracks", ())
+                    )
+                    # Motion gate: track yang box-nya nyaris nggak gerak selama
+                    # STATIC_WINDOW_S = "diam" (orang duduk santai) → nggak nyumbang
+                    # ke flag rekam. Recorder cooldown kalau semua track diam.
+                    _now_mono = time.monotonic()
+                    _mh = self._motion_hist
+                    any_moving = False
+                    for tid, _, x1, y1, x2, y2, _, _ in per_box:
+                        k = (slot.camera_id, tid)
+                        h = _mh.get(k)
+                        if h is None:
+                            h = _mh[k] = deque(maxlen=64)
+                        h.append((_now_mono, (x1 + x2) * 0.5, (y1 + y2) * 0.5))
+                        recent = [(cx, cy) for t, cx, cy in h if _now_mono - t <= STATIC_WINDOW_S]
+                        if len(recent) < 3:
+                            any_moving = True   # baru muncul → anggap gerak
+                        else:
+                            xs = [p[0] for p in recent]; ys = [p[1] for p in recent]
+                            if max(max(xs) - min(xs), max(ys) - min(ys)) > STATIC_PX:
+                                any_moving = True
+                    for k in [k for k in _mh if k[0] == slot.camera_id and k[1] not in active_tids]:
+                        del _mh[k]
+                    slot._rec_has_person = (n_raw > 0 and any_moving) or recent_lost
                     slot._rec_annots = [
-                        (x1, y1, x2, y2, slot.db.name_of(tid, slot.camera_id) or f"#{tid}")
-                        for tid, _, x1, y1, x2, y2, _, _ in per_box
+                        (x1, y1, x2, y2,
+                         f"{slot.db.name_of(tid, slot.camera_id) or f'#{tid}'} {conf:.2f}")
+                        for tid, conf, x1, y1, x2, y2, _, _ in per_box
                     ]
 
                     idx = frame_idx[slot.camera_id] + 1

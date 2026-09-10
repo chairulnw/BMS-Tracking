@@ -13,7 +13,12 @@ export class AuthUrlPipe implements PipeTransform {
     if (!token) {
       return url;
     }
-    const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}token=${encodeURIComponent(token)}`;
+    // Sisipkan token SEBELUM fragment (#t=... media fragment buat seek video) —
+    // kalau ditaruh di belakang, "#" bikin token jadi bagian fragment & auth gagal.
+    const h = url.indexOf('#');
+    const base = h >= 0 ? url.slice(0, h) : url;
+    const frag = h >= 0 ? url.slice(h) : '';
+    const sep = base.includes('?') ? '&' : '?';
+    return `${base}${sep}token=${encodeURIComponent(token)}${frag}`;
   }
 }

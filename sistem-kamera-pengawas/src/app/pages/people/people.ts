@@ -213,6 +213,16 @@ export class People implements OnInit {
     } else {
       this._reload();
     }
+
+    // Auto-refresh: deteksi baru dari AI service masuk terus. Poll halaman
+    // saat ini (bukan _reload — biar page & scroll gak ke-reset), cuma kalau
+    // tab aktif & lagi lihat hari ini. Selain itu percuma, data lama gak berubah.
+    const poll = setInterval(() => {
+      if (document.hidden || this.selectedDate !== this._todayISO()) return;
+      this._loadFeed();
+      this._loadPersons();
+    }, 30_000);
+    this.destroyRef.onDestroy(() => clearInterval(poll));
   }
 
   private _loadCameras(): void {
