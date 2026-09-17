@@ -29,6 +29,8 @@ from app.services.stream_service.backend_client import _BackendClient, _fetch_zo
 from app.services.stream_service.cam_slot import _CamSlot
 
 CROSSING_COOLDOWN = 3.0   # detik minimum antar event crossing per (garis/polygon, track)
+CROSSING_ORPHAN_AGE = float(os.getenv("CROSSING_ORPHAN_AGE", "20"))  # crossing yg track-nya
+#   nggak pernah resolve dalam N detik → flush pakai label terbaik yg ada (jgn ilang)
 # Cuma buat timestamp latency.csv (biar gampang dibaca manual, single-location
 # Jakarta) — timestamp event ke backend/DB TETAP UTC (timezone.utc di tempat
 # lain file ini), jangan ikut diganti.
@@ -253,6 +255,12 @@ class BatchProcessor:
         self._tracker_cls   = models.tracker_cls
         self._par           = models.par
 
+        # Crossing di-buffer per (cam, track_id) sampai tracklet-nya resolve —
+        # baru di-POST dengan person_label FINAL, bukan label sementara pas
+        # garis dilewati (timeline pergerakan jadi konsisten). Kalau track
+        # kadung hilang tanpa pernah resolve, di-flush pakai label terbaik yg ada.
+        self._pending_crossings: dict[tuple[str, int], list[dict]] = {}
+
     def start(self) -> None:
         self._thread = threading.Thread(
             target=self._loop, daemon=True, name="batch-infer"
@@ -299,6 +307,8 @@ class BatchProcessor:
                     closed = self._slots[0].db.close_all()
                     if closed:
                         self._finalize_tracklets(closed)
+                    # Sisa crossing di-flush sebelum track_id di-recycle dari 1.
+                    self._sweep_orphan_crossings(time.time() + CROSSING_ORPHAN_AGE)
                     self._slots[0].db.prune_banks()
                     self._slots[0].db.reset()
                     self._motion_hist.clear()
@@ -507,19 +517,11 @@ class BatchProcessor:
                                             continue
                                         slot._last_dir[key]    = direction
                                         slot._crossing_ts[key] = now
-                                        snap_url     = self._save_event_snapshot(frame, x1, y1, x2, y2, slot.camera_id)
-                                        person_label = slot.db.label_of(track_id, slot.camera_id)
-                                        _BackendClient.post_occupancy_event(
-                                            slot.camera_id, zc_id, direction, "room_entry",
-                                            snap_url, person_label, track_id, fx, fy,
-                                        )
-                                        _BackendClient.post_camera_event(
-                                            slot.camera_id, "zone_entry", "info",
-                                            description=f"{direction} via {zone['name']}",
-                                            snapshot_url=snap_url,
-                                            person_label=person_label,
-                                            timestamp=datetime.fromtimestamp(now, tz=timezone.utc),
-                                            ai_latency_ms=self._last_ai_ms.get(slot.camera_id),
+                                        snap_url = self._save_event_snapshot(frame, x1, y1, x2, y2, slot.camera_id)
+                                        self._buffer_crossing(
+                                            slot.camera_id, track_id, zc_id, direction,
+                                            zone["name"], snap_url, fx, fy, now,
+                                            slot.db.label_of(track_id, slot.camera_id),
                                         )
 
                         elif zone["type"] == "polygon":
@@ -537,18 +539,12 @@ class BatchProcessor:
                                     continue
                                 slot._polygon_inside[key] = inside
                                 slot._crossing_ts[key]    = now
-                                direction    = "IN" if inside else "OUT"
-                                snap_url     = self._save_event_snapshot(frame, x1, y1, x2, y2, slot.camera_id)
-                                person_label = slot.db.label_of(track_id, slot.camera_id)
-                                _BackendClient.post_occupancy_event(
-                                    slot.camera_id, zc_id, direction, "room_entry",
-                                    snap_url, person_label, track_id, fx, fy,
-                                )
-                                _BackendClient.post_camera_event(
-                                    slot.camera_id, "zone_entry", "info",
-                                    description=f"{direction} via {zone['name']}",
-                                    snapshot_url=snap_url,
-                                    person_label=person_label,
+                                direction = "IN" if inside else "OUT"
+                                snap_url  = self._save_event_snapshot(frame, x1, y1, x2, y2, slot.camera_id)
+                                self._buffer_crossing(
+                                    slot.camera_id, track_id, zc_id, direction,
+                                    zone["name"], snap_url, fx, fy, now,
+                                    slot.db.label_of(track_id, slot.camera_id),
                                 )
 
                     # Clip state diupdate di sini; frame ditulis oleh _recorder_loop.
@@ -617,6 +613,10 @@ class BatchProcessor:
                     if idx % 15 == 0:
                         slot.update_state(idx, slot.db.to_records())
 
+                # Crossing yang track-nya keburu hilang tanpa resolve → flush
+                # pakai label terbaik yg ada, biar occupancy count nggak meleset.
+                self._sweep_orphan_crossings(now)
+
         finally:
             # Flush semua tracklet terbuka sebelum berhenti — kalau tidak,
             # observasi yang sudah terkumpul hilang begitu saja tanpa POST.
@@ -624,6 +624,8 @@ class BatchProcessor:
                 closed = self._slots[0].db.close_all()
                 if closed:
                     self._finalize_tracklets(closed)
+            # Crossing sisa yang track-nya nggak keburu resolve → jangan hilang.
+            self._sweep_orphan_crossings(time.time() + CROSSING_ORPHAN_AGE)
             for slot in self._slots:
                 slot.shutdown()
             self._pred_logger.close()
@@ -640,6 +642,51 @@ class BatchProcessor:
             "cameras_active":   sum(1 for s in self._slots if s.online),
             "cameras_total":    len(self._slots),
         }
+
+    def _buffer_crossing(self, cam_id: str, track_id: int, zc_id: int, direction: str,
+                         zone_name: str, snap_url: "str | None", fx: int, fy: int,
+                         ts: float, prov_label: "str | None") -> None:
+        pc = {"zc_id": zc_id, "direction": direction, "zone_name": zone_name,
+              "snap_url": snap_url, "fx": fx, "fy": fy, "ts": ts}
+        # OUT = orang keluar, track-nya biasanya langsung habis → jangan tunggu
+        # resolve (occupancy count harus turun cepat). Cuma IN yang di-buffer
+        # supaya awal rangkaian pergerakan dapat identitas final.
+        if direction != "IN":
+            self._post_crossing(cam_id, track_id, pc, prov_label or f"Unknown@{cam_id}")
+            return
+        self._pending_crossings.setdefault((cam_id, track_id), []).append(pc)
+
+    def _flush_crossings(self, cam_id: str, track_ids, person_label: str) -> None:
+        """POST semua crossing yang di-buffer buat track-track ini, pakai label
+        final. Dipanggil dari _finalize_tracklets (identitas sudah resolve)."""
+        for tid in track_ids:
+            for pc in self._pending_crossings.pop((cam_id, tid), []):
+                self._post_crossing(cam_id, tid, pc, person_label)
+
+    def _sweep_orphan_crossings(self, now: float) -> None:
+        """Track yang hilang tanpa pernah nutup tracklet (mis. terlalu pendek) —
+        crossing-nya tetap fakta fisik, jangan sampai occupancy count meleset.
+        Flush pakai label terbaik yang ada di gallery saat ini."""
+        for (cam_id, tid), pcs in list(self._pending_crossings.items()):
+            if not pcs or now - pcs[0]["ts"] < CROSSING_ORPHAN_AGE:
+                continue
+            label = self._slots[0].db.label_of(tid, cam_id) if self._slots else None
+            for pc in pcs:
+                self._post_crossing(cam_id, tid, pc, label or f"Unknown@{cam_id}")
+            del self._pending_crossings[(cam_id, tid)]
+
+    @staticmethod
+    def _post_crossing(cam_id: str, track_id: int, pc: dict, person_label: str) -> None:
+        _BackendClient.post_occupancy_event(
+            cam_id, pc["zc_id"], pc["direction"], "room_entry",
+            pc["snap_url"], person_label, track_id, pc["fx"], pc["fy"],
+        )
+        _BackendClient.post_camera_event(
+            cam_id, "zone_entry", "info",
+            description=f"{pc['direction']} via {pc['zone_name']}",
+            snapshot_url=pc["snap_url"], person_label=person_label,
+            timestamp=datetime.fromtimestamp(pc["ts"], tz=timezone.utc),
+        )
 
     def _finalize_tracklets(self, closed: list[dict]) -> None:
         """Tracklet baru saja ditutup (lihat pipeline_service.py._resolve_tracklet).
@@ -682,6 +729,12 @@ class BatchProcessor:
             self._pred_logger.flush((cam, result["track_id"]), result["display_name"])
             for frag_tid in result.get("folded_track_ids", ()):
                 self._pred_logger.flush((cam, frag_tid), result["display_name"])
+
+            # Crossing yang di-buffer selama tracklet ini terbuka → POST sekarang
+            # dengan label final (lihat _buffer_crossing).
+            self._flush_crossings(
+                cam, [result["track_id"], *result.get("folded_track_ids", ())], label,
+            )
 
     def _on_reconnect(self, slot: _CamSlot, success: bool) -> None:
         if not success:

@@ -42,7 +42,8 @@ SEED_MIN_COHERENCE = 0.35   # tracklet yang mau jadi identitas BARU: cosine PAIR
                             # tune dari situ.
 MAX_BANK_SIZE      = 5      # maks entry per identitas di bank embedding
 BANK_MERGE_SIM     = 0.90   # sim >= ini → update entry lama, bukan tambah baru
-BANK_EXPAND_MIN    = 0.67   # skor match tracklet < ini → JANGAN tambah prototipe bank baru,
+BANK_EXPAND_MIN    = 0.67   # skor match tracklet >= ini → boleh tambah prototipe bank baru
+BANK_EXPAND_MARGIN = 0.15   # ATAU margin top1-top2 >= ini (match jelas walau skor sedang)
 BANK_STALE_HOURS   = 6.0    # entry yang tidak jadi top-match selama N jam → kandidat pruning
 QUALITY_MIN_H      = 80     # tinggi crop minimum (px)
 QUALITY_MIN_W      = 40     # lebar crop minimum (px)
@@ -51,6 +52,7 @@ QUALITY_LAP_VAR    = 100.0  # min Laplacian variance — blur gate
 SAMPLE_MIN_CONF    = 0.62   # conf YOLO minimum buat sebuah box jadi SAMPLE embedding.
 
 DEBUG_CROPS_DIR = Path("debug_crops")
+REID_DUMP_DIR   = Path("output/debug_reid")   # DEBUG_REID=1 → dump crop tiap sample + ringkasan bank per tracklet
 
 def _debug_reid() -> bool:
     return os.getenv("DEBUG_REID", "").lower() in ("1", "true")
@@ -89,7 +91,8 @@ class Tracklet:
     started_at: datetime
     last_seen:  datetime
     n_det:      int                       = 0
-    samples:    list                      = field(default_factory=list)  # [(emb, quality)], top-K
+    samples:    list                      = field(default_factory=list)  # [(emb, quality)], disebar merata sepanjang tracklet
+    sample_ts:  list                      = field(default_factory=list)  # epoch tiap sample, lockstep dgn samples
     best_conf:  float                     = 0.0
     best_crop:  "np.ndarray | None"       = None
     best_x:     "int | None"              = None  # titik kaki (foot point) sampel best_conf — fallback lama
@@ -97,6 +100,7 @@ class Tracklet:
     positions:  list                      = field(default_factory=list)  # [(x,y), ...] tiap observe(), urut waktu
     missing:    int                       = 0   # siklus batch berturut-turut tanpa track ini
     folded_track_ids: list                = field(default_factory=list)  # track_id fragmen yang dilipat ke sini
+    sample_crops: list                    = field(default_factory=list)  # crop per sample, hanya diisi kalau DEBUG_REID=1
 
 
 def par_attrs(par, crop: "np.ndarray | None") -> "dict | None":
@@ -206,18 +210,45 @@ class IdentityDB:
             tl.positions.pop(0)
         tl.positions.append(foot_point_xyxy(x1, y1, x2, y2))
         if emb is not None and conf >= SAMPLE_MIN_CONF:
-            self._add_sample(tl, emb, quality)
+            crop = (_padded_crop(frame, x1, y1, x2, y2)
+                    if _debug_reid() and frame is not None else None)
+            self._add_sample(tl, emb, quality, crop, ts.timestamp())
 
     @staticmethod
-    def _add_sample(tl: Tracklet, emb: np.ndarray, quality: float) -> None:
-        # Top-K by quality (Laplacian var): kalau penuh, ganti sample terburuk
-        # bila yang baru lebih tajam.
+    def _add_sample(tl: Tracklet, emb: np.ndarray, quality: float,
+                    crop: "np.ndarray | None" = None, ts: float = 0.0) -> None:
+        # Sebar sample MERATA sepanjang umur tracklet, bukan ambil 16 yang paling
+        # tajam — frame tajam ngumpul di satu momen (orang pas dekat/fokus) →
+        # 16 sample jadi satu pose, embedding nggak mewakili. Pas penuh: buang
+        # sample dari kluster waktu terpadat kalau sample baru mengisi celah;
+        # kalau nggak, cukup ganti yang lebih buram di sekitarnya.
+        def _put(i):
+            tl.samples[i] = (emb, quality)
+            if _debug_reid() and i < len(tl.sample_crops):
+                tl.sample_crops[i] = crop
+            if i < len(tl.sample_ts):
+                tl.sample_ts[i] = ts
+
         if len(tl.samples) < TRACKLET_MAX_SAMPLES:
             tl.samples.append((emb, quality))
+            tl.sample_ts.append(ts)
+            if _debug_reid():
+                tl.sample_crops.append(crop)
             return
-        worst_idx = min(range(len(tl.samples)), key=lambda i: tl.samples[i][1])
-        if quality > tl.samples[worst_idx][1]:
-            tl.samples[worst_idx] = (emb, quality)
+
+        if not tl.sample_ts or ts == 0.0:                      # tanpa info waktu → fallback lama
+            worst = min(range(len(tl.samples)), key=lambda i: tl.samples[i][1])
+            if quality > tl.samples[worst][1]:
+                _put(worst)
+            return
+
+        tss = tl.sample_ts
+        new_gap = min(abs(ts - t) for t in tss)                # jarak sample baru ke tetangga terdekat
+        gaps = [min(abs(tss[i] - tss[j]) for j in range(len(tss)) if j != i)
+                for i in range(len(tss))]
+        densest = min(range(len(tss)), key=lambda i: gaps[i])  # sample paling berdempet
+        if new_gap > gaps[densest] or quality > tl.samples[densest][1]:
+            _put(densest)
 
     def update_active(self, cam_id: str, track_ids: "set[int]") -> None:
         """Dipanggil tiap siklus batch. Update tracklet mana yang masih 'hidup'
@@ -307,8 +338,9 @@ class IdentityDB:
                 continue  # tidak overlap waktu
             if float(np.dot(emb, self._tl_mean_emb(o))) < CONCURRENT_FRAGMENT_MIN_SIM:
                 continue  # jelas beda orang
-            for s_emb, s_q in tl.samples:
-                self._add_sample(o, s_emb, s_q)
+            for i, (s_emb, s_q) in enumerate(tl.samples):
+                self._add_sample(o, s_emb, s_q,
+                                 ts=tl.sample_ts[i] if i < len(tl.sample_ts) else 0.0)
             o.n_det += tl.n_det
             o.positions.extend(tl.positions)
             del o.positions[:-TRACKLET_MAX_POSITIONS]
@@ -352,7 +384,8 @@ class IdentityDB:
             self._embeddings[name]       = [{"emb": emb, "last_match": tl.last_seen, "cam_id": tl.cam_id}]
             self._display_to_label[name] = label
         else:
-            self._bank_update(name, emb, tl.cam_id, match_score=score)
+            self._bank_update(name, emb, tl.cam_id,
+                              match_score=score, margin=score - top2_score)
             label = self._display_to_label.get(name, name)
 
         key = self._key(tl.track_id, tl.cam_id)
@@ -375,6 +408,9 @@ class IdentityDB:
         coh_str = f", koh={self._sample_coherence(tl):.2f}" if is_new else ""
         print(f"[reid] {ts} {tl.cam_id}/t{tl.track_id} tracklet ditutup ({tl.n_det} det, {len(tl.samples)} sample{coh_str}) "
               f"→ {'NEW' if is_new else 'MATCH'} {name!r}  ({reason})")
+
+        if _debug_reid():
+            self._dump_reid(tl, name, label, is_new, reason)
 
         return {
             "display_name": name,
@@ -400,7 +436,42 @@ class IdentityDB:
         }
 
 
-    def _bank_update(self, name: str, emb: np.ndarray, cam_id: str, *, match_score: float = 1.0) -> None:
+    def _dump_reid(self, tl: Tracklet, name: str, label: str, is_new: bool, reason: str) -> None:
+        """DEBUG_REID=1: tulis crop tiap sample + best_crop + meta.txt (matriks
+        cosine antar sample + ringkasan bank) ke output/debug_reid/<label>__.../."""
+        try:
+            safe = label.replace("/", "_").replace("#", "").replace(" ", "")
+            d = REID_DUMP_DIR / f"{safe}__t{tl.track_id}__{tl.cam_id}__{tl.started_at.strftime('%H%M%S')}"
+            d.mkdir(parents=True, exist_ok=True)
+            for i, ((_, q), crop) in enumerate(zip(tl.samples, tl.sample_crops)):
+                if crop is not None and getattr(crop, "size", 0):
+                    cv2.imwrite(str(d / f"sample_{i:02d}_q{q:.0f}.jpg"), crop)
+            if tl.best_crop is not None and tl.best_crop.size:
+                cv2.imwrite(str(d / "best_crop.jpg"), tl.best_crop)
+
+            span = (max(tl.sample_ts) - min(tl.sample_ts)) if len(tl.sample_ts) > 1 else 0.0
+            L = [f"{label}   ({'NEW' if is_new else 'MATCH ' + name})",
+                 f"cam={tl.cam_id} track={tl.track_id} n_det={tl.n_det} samples={len(tl.samples)}",
+                 f"rentang waktu sample: {span:.1f}s", f"assoc: {reason}", ""]
+            if len(tl.samples) > 1:
+                E = np.stack([e for e, _ in tl.samples])
+                S = E @ E.T
+                L.append("cosine antar sample:")
+                L += ["  " + " ".join(f"{v:.2f}" for v in row) for row in S]
+                iu = np.triu_indices(len(E), k=1)
+                L.append(f"  min={S[iu].min():.3f}  mean={S[iu].mean():.3f}")
+            L.append("")
+            mean = self._tl_mean_emb(tl)
+            L.append("bank semua identitas — cosine ke mean tracklet ini:")
+            for nm, bank in self._embeddings.items():
+                for j, e in enumerate(bank):
+                    L.append(f"  {nm} [{j}] cam={e.get('cam_id')} cos={float(np.dot(mean, e['emb'])):.3f}")
+            (d / "meta.txt").write_text("\n".join(L))
+        except Exception as exc:
+            print(f"[reid] dump gagal: {exc}")
+
+    def _bank_update(self, name: str, emb: np.ndarray, cam_id: str, *,
+                     match_score: float = 1.0, margin: float = 1.0) -> None:
         # Aware UTC — harus konsisten dengan started_at/ended_at yang dipakai
         # associate()/load_gallery(), kalau tidak prune_banks() crash saat
         # membandingkan entry lokal (naive) dengan entry hasil load_gallery (aware).
@@ -416,8 +487,12 @@ class IdentityDB:
             merged = 0.9 * bank[best_idx]["emb"] + 0.1 * emb
             bank[best_idx]["emb"]        = merged / (np.linalg.norm(merged) + 1e-8)
             bank[best_idx]["last_match"] = now
-        elif match_score < BANK_EXPAND_MIN:
-            # match tipis → jangan ekspansi bank, cukup jaga entry terdekat tetap fresh
+        elif match_score < BANK_EXPAND_MIN and margin < BANK_EXPAND_MARGIN:
+            # match tipis DAN ambigu → jangan ekspansi bank, cukup jaga entry
+            # terdekat tetap fresh. Kalau margin lebar (top1 jelas ngungguli
+            # top2) walau skor sedang, view ini tetap layak masuk bank —
+            # tanpa ini bank nggak pernah dapet view cross-camera (skor cross-cam
+            # jarang nyampe BANK_EXPAND_MIN) dan matching cross-cam macet.
             bank[best_idx]["last_match"] = now
         else:
             new_entry = {"emb": emb, "last_match": now, "cam_id": cam_id}
