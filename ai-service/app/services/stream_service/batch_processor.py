@@ -1,7 +1,3 @@
-"""Satu thread inferensi untuk semua kamera — model YOLO/ReID di-load lewat
-_ModelBundle (lihat load_model_bundle) yang di-cache di StreamManager supaya
-restart stream tidak reload model dari disk tiap kali."""
-
 import os
 import queue
 import threading
@@ -29,34 +25,22 @@ from app.services.stream_service.backend_client import _BackendClient, _fetch_zo
 from app.services.stream_service.cam_slot import _CamSlot
 
 CROSSING_COOLDOWN = 3.0   # detik minimum antar event crossing per (garis/polygon, track)
-CROSSING_ORPHAN_AGE = float(os.getenv("CROSSING_ORPHAN_AGE", "20"))  # crossing yg track-nya
-#   nggak pernah resolve dalam N detik → flush pakai label terbaik yg ada (jgn ilang)
-# Cuma buat timestamp latency.csv (biar gampang dibaca manual, single-location
-# Jakarta) — timestamp event ke backend/DB TETAP UTC (timezone.utc di tempat
-# lain file ini), jangan ikut diganti.
+CROSSING_ORPHAN_AGE = float(os.getenv("CROSSING_ORPHAN_AGE", "20"))  # flush crossing yg track-nya tak pernah resolve
+
+# _WIB: cuma buat timestamp latency.csv; event ke backend/DB tetap timezone.utc
 _WIB = ZoneInfo("Asia/Jakarta")
 THUMBNAILS_DIR    = Path("thumbnails")
 PREDICTIONS_CSV   = Path("predictions.csv")  # log prediksi mode file-playback, utk dibanding ground truth
 
-# Ukuran input YOLO (default ultralytics 640). Turunin → deteksi lebih cepat,
-# tapi orang kecil/jauh lebih sering ke-miss. Env override buat tuning.
 DETECT_IMGSZ = int(os.getenv("DETECT_IMGSZ", "640"))
-# Frame dengan rata-rata brightness < ini dilewati (tidak di-detect / track).
-# Malam / feed terlalu gelap cuma bikin deteksi noise → tracklet sampah.
-# 0 = matikan gate. Naikin kalau feed IR malam masih ikut ke-proses.
-DARK_MEAN = float(os.getenv("DARK_MEAN", "40"))
-# Box track yang ke-overlap box lain > fraksi ini (relatif ke box terkecil)
-# = ketutupan / berdempet → crop-nya isi >1 orang → embedding-nya di-skip.
-OCCLUSION_FRAC = float(os.getenv("OCCLUSION_FRAC", "0.45"))
-# Rekam tetap jalan selama masih ada track yang HILANG < N frame lalu (ByteTrack
-# lost_stracks). Orang masih di sana, YOLO cuma kedip. Cuma nyentuh flag rekam,
-# nggak masukin box prediksi ke pipeline identitas.
-REC_COAST_FRAMES = int(os.getenv("REC_COAST_FRAMES", "20"))
+DARK_MEAN = float(os.getenv("DARK_MEAN", "40"))         # 0 = matikan gate; frame < brightness ini dilewati
+OCCLUSION_FRAC = float(os.getenv("OCCLUSION_FRAC", "0.45"))  # box overlap > ini → skip embedding (crop campur)
+REC_COAST_FRAMES = int(os.getenv("REC_COAST_FRAMES", "20"))  # tetap rekam N frame setelah track hilang (ByteTrack coast)
 
 
 def _overlap_frac(a: tuple, b: tuple) -> float:
-    """Luas irisan a∩b dibagi luas box TERKECIL. Nangkep 'box kecil di dalam
-    box besar' yang IoU-nya kelewatan (union kegedean)."""
+    """Luas irisan a∩b dibagi luas box terkecil (bukan IoU) — biar 'box kecil
+    di dalam box besar' tetap kedeteksi walau union-nya gede."""
     ix = max(0, min(a[2], b[2]) - max(a[0], b[0]))
     iy = max(0, min(a[3], b[3]) - max(a[1], b[1]))
     inter = ix * iy
@@ -69,10 +53,8 @@ def _overlap_frac(a: tuple, b: tuple) -> float:
 
 
 class _OCSortAdapter:
-    """Bungkus OCSort (paket `ocsort`, interface array polos) biar bisa dipanggil
-    persis sama seperti BYTETracker/BOTSORT: .update(det, frame), dengan det
-    berupa objek Boxes ultralytics (.xyxy/.conf/.cls), balikin baris
-    [x1,y1,x2,y2,track_id,conf] (indeks 0-5 dipakai kode pemanggil)."""
+    """Bungkus OCSort (interface array polos) biar dipanggil sama seperti
+    BYTETracker/BOTSORT: .update(det, frame) -> [x1,y1,x2,y2,track_id,conf]."""
 
     def __init__(self, args=None) -> None:
         self._oc = OCSort()
@@ -83,17 +65,12 @@ class _OCSortAdapter:
         dets = np.concatenate(
             [det.xyxy, det.conf.reshape(-1, 1), det.cls.reshape(-1, 1)], axis=1
         )
-        # paket `ocsort` ini panggil .numpy() di dalam update() sendiri,
-        # jadi butuh torch.Tensor sebagai input, bukan ndarray polos.
-        tracks = self._oc.update(torch.as_tensor(dets), None)  # -> [x1,y1,x2,y2,id,cls,conf]
+        tracks = self._oc.update(torch.as_tensor(dets), None)  # OCSort butuh Tensor, bukan ndarray
         if len(tracks) == 0:
             return np.empty((0, 6))
         return tracks[:, [0, 1, 2, 3, 4, 6]]   # -> [x1,y1,x2,y2,id,conf]
 
 
-# ponytail: bytetrack/botsort masih lewat args+yaml bawaan Ultralytics;
-# ocsort dibungkus _OCSortAdapter jadi interface-nya sama (tuple kedua None
-# = tidak ada yaml config buat OC-SORT).
 TRACKER_TYPE = os.getenv("TRACKER_TYPE", "bytetrack")   # bytetrack | botsort | ocsort
 _TRACKER_REGISTRY = {"bytetrack": (BYTETracker,      "bytetrack.yaml"),
                      "botsort":   (BOTSORT,          "botsort.yaml"),
@@ -102,9 +79,7 @@ _TRACKER_REGISTRY = {"bytetrack": (BYTETracker,      "bytetrack.yaml"),
 
 @dataclass
 class _ModelBundle:
-    """Model YOLO + ReID yang sudah di-load, plus config tracker. Dibuat sekali
-    lewat load_model_bundle() dan dipakai ulang di setiap BatchProcessor —
-    sebelumnya model ini di-load ulang dari disk tiap kali stream direstart."""
+    """Model + config sekali-load, dipakai ulang tiap restart stream via StreamManager."""
     detector:     YOLO
     extractor:    "torchreid.utils.FeatureExtractor"
     tracker_args: IterableSimpleNamespace
@@ -119,11 +94,8 @@ def load_model_bundle(detector_model: str, reid_model: str) -> _ModelBundle:
         detector_device = "cuda"
     else:
         detector_device = "cpu"
-    # ReID (OSNet) jalan per box terdeteksi, tiap siklus, di semua kamera —
-    # jauh lebih sering dipanggil daripada YOLO per-frame. Sebelumnya cuma
-    # cek cuda, jadi selalu jatuh ke CPU di Mac walau MPS ada — kemungkinan
-    # besar inilah bottleneck asli di balik throughput rendah (klip slow-mo,
-    # predictions.csv << ground truth).
+    # ReID dipanggil jauh lebih sering daripada YOLO (per box, tiap siklus);
+    # tanpa cek MPS di sini dulu selalu jatuh ke CPU di Mac — bottleneck asli.
     if torch.backends.mps.is_available():
         reid_device = "mps"
     elif torch.cuda.is_available():
@@ -131,15 +103,12 @@ def load_model_bundle(detector_model: str, reid_model: str) -> _ModelBundle:
     else:
         reid_device = "cpu"
 
-    # RTDETR pakai kelas ultralytics beda dari YOLO — dipilih dari nama file
-    # weight-nya (mis. "rtdetr-l.pt"), biar DETECTOR_MODEL tetap satu env var saja.
+    # RTDETR pakai kelas ultralytics beda dari YOLO, dipilih dari nama file weight
     detector_cls = RTDETR if "rtdetr" in detector_model.lower() else YOLO
     print(f"[batch] loading {detector_cls.__name__}({detector_model}) → {detector_device}, "
           f"ReID({reid_model}) → {reid_device}")
     detector = detector_cls(detector_model)
     detector.to(detector_device)
-    # ponytail: pemetaan model_name -> checkpoint lokal masih manual satu-satu.
-    # Kalau nambah model Re-ID baru, tambahkan baris di sini.
     _reid_checkpoints = {
         "osnet_ain_x1_0": "osnet_ain_x1_0_msmt17.pt",
         "resnet50":       "resnet50_market1501_converted.pth",
@@ -163,15 +132,12 @@ def load_model_bundle(detector_model: str, reid_model: str) -> _ModelBundle:
     tracker_args = None
     if tracker_yaml is not None:
         tracker_cfg  = YAML.load(check_yaml(tracker_yaml))
-        # Pakai default ByteTrack (track_buffer 30, match_thresh 0.8): eval
-        # nunjukin tracker ketat + asosiasi-tracklet longgar > tracker longgar
-        # (track_id melayang nyebrang orang saat occlusion → tracklet
-        # terkontaminasi). Lihat predictions_runs_current/eval_oldcfg_*.
+        # Default ByteTrack (buffer 30, match_thresh 0.8): tracker ketat +
+        # asosiasi-tracklet longgar mengungguli tracker longgar dalam eval
+        # (tracker longgar bikin track_id melayang nyebrang orang saat occlusion).
         tracker_args = IterableSimpleNamespace(**tracker_cfg)
 
-    # PAR (atribut penampilan, Fase 3) — dijalankan sekali per tracklet pada
-    # crop terbaik (lihat _resolve_tracklet di pipeline_service.py), bukan per
-    # frame: ~2s/crop di CPU, per-frame akan melumpuhkan batch loop.
+    # PAR jalan sekali per tracklet di crop terbaik, bukan per frame (~2s/crop di CPU)
     par = None
     rap1_checkpoint = Path("checkpoints/par_checkpoints/RAP1.pth")
     if rap1_checkpoint.exists():
@@ -292,14 +258,11 @@ class BatchProcessor:
                 today = datetime.now().date()
                 if today != current_date:
                     current_date = today
-                    # Flush semua tracklet terbuka SEBELUM reset — kalau tidak,
-                    # rebuild BYTETracker di bawah mendaur ulang track_id dari 1,
-                    # dan tracklet kemarin yang belum ditutup akan menerima box
-                    # orang lain hari ini (lihat plan/07-fase2-detail.md §3).
+                    # Flush tracklet & crossing terbuka SEBELUM rebuild tracker di
+                    # bawah mendaur ulang track_id dari 1 (plan/07-fase2-detail.md §3)
                     closed = self._slots[0].db.close_all()
                     if closed:
                         self._finalize_tracklets(closed)
-                    # Sisa crossing di-flush sebelum track_id di-recycle dari 1.
                     self._sweep_orphan_crossings(time.time() + CROSSING_ORPHAN_AGE)
                     self._slots[0].db.prune_banks()
                     self._slots[0].db.reset()
@@ -329,14 +292,12 @@ class BatchProcessor:
                     try:
                         frame = slot.frame_q.get_nowait()
                     except queue.Empty:
-                        # Belum ada frame baru — pakai placeholder
                         batch_frames.append(placeholder)
                         has_new.append(False)
                         continue
 
                     if frame is None:
                         if slot._playlist:
-                            # File playlist habis — tidak perlu reconnect
                             print(f"[{slot.camera_id}] semua clip selesai")
                             slot.online = False
                             self._file_slots_done.add(slot.camera_id)
@@ -345,21 +306,17 @@ class BatchProcessor:
                                     target=self._auto_stop_cb, daemon=True, name="auto-stop"
                                 ).start()
                         else:
-                            # RTSP putus — reconnect seperti biasa
                             print(f"[{slot.camera_id}] disconnected")
                             slot.start_reconnect(self._on_reconnect)
                         batch_frames.append(placeholder)
                         has_new.append(False)
                         continue
 
-                    # item selalu (frame, decode_ms, source_clip, local_frame) —
-                    # 2 field terakhir None buat RTSP (lihat cam_slot.py).
+                    # 2 field terakhir None buat RTSP (lihat cam_slot.py)
                     frame, slot.last_decode_ms, slot.last_source_clip, slot.last_local_frame = frame
 
                     slot.last_frame = frame
                     if DARK_MEAN > 0 and float(frame.mean()) < DARK_MEAN:
-                        # terlalu gelap — lewati deteksi/tracking, jangan bikin
-                        # tracklet dari noise. Recorder tetap dapat frame sendiri.
                         batch_frames.append(frame)
                         has_new.append(False)
                         continue
@@ -370,15 +327,10 @@ class BatchProcessor:
                     time.sleep(0.02)
                     continue
 
-                # ── Batch YOLO detect — 1 GPU call, HANYA kamera yang punya
-                # frame baru siklus ini. Kamera offline (permanen atau lagi
-                # reconnect) numpang di batch_frames sebagai placeholder demi
-                # alignment index dengan self._slots, tapi tidak pernah masuk
-                # predict() — dulu ikut ke-infer padahal cuma frame hitam,
-                # buang GPU/CPU cycle selama kamera itu mati.
-                # Pakai predict() bukan track() karena batch track() berbagi 1
-                # tracker untuk semua kamera (bug Ultralytics di non-stream mode).
-                # Tiap kamera punya BYTETracker sendiri di slot.tracker.
+                # 1 GPU call, hanya kamera dengan frame baru (kamera offline numpang
+                # placeholder buat alignment index, tidak masuk predict()). predict()
+                # bukan track() karena batch track() berbagi 1 tracker lintas kamera
+                # (bug Ultralytics non-stream) — tiap kamera pakai slot.tracker sendiri.
                 active_idx = [i for i, is_new in enumerate(has_new) if is_new]
                 _batch_t0 = time.perf_counter()
                 active_results = self._detector.predict(
@@ -394,7 +346,7 @@ class BatchProcessor:
                 for i, r in zip(active_idx, active_results):
                     results[i] = r
 
-                # ── Per-camera post-processing ────────────────────────────────
+                # Per-camera post-processing
                 for slot, result, is_new in zip(self._slots, results, has_new):
                     if not is_new:
                         continue
@@ -402,17 +354,11 @@ class BatchProcessor:
                     frame = slot.last_frame
                     boxes = result.boxes
 
-                    # Raw detection count — tidak butuh track ID.
-                    # Dipakai untuk clip recorder agar rekaman tetap jalan.
                     n_raw = 0
                     if boxes is not None:
                         n_raw = sum(1 for b in boxes if int(b.cls[0]) == 0)
 
-                    # Per-camera BYTETracker update → track ID per kamera
-                    # (skip kalau analytics dimatikan untuk kamera ini — capture &
-                    # rekaman tetap jalan, cuma deteksi/tracking/event yang dilewati)
-                    # Instrumentasi evaluasi (lihat latency_logger.py) — cuma
-                    # nyatet waktu, gak ngubah urutan/hasil logika di bawah.
+                    # skip kalau analytics dimatikan — capture & rekaman tetap jalan
                     tracking_ms = 0.0
                     reid_ms     = 0.0
                     per_box: list[tuple[int, float, int, int, int, int, "np.ndarray | None", float]] = []
@@ -426,9 +372,7 @@ class BatchProcessor:
                             x1, y1, x2, y2 = tboxes[i]
                             track_id = int(t[4])
                             conf_val = float(t[5])
-                            # Occlusion: box track ini ketutupan / berdempet box lain
-                            # di frame yang sama → crop-nya isi 2 orang → jangan
-                            # sampel embedding (cegah kontaminasi & magnet).
+                            # box ketutupan/berdempet box lain → crop isi 2 orang, skip embedding
                             occluded = any(_overlap_frac(tboxes[i], tboxes[j]) > OCCLUSION_FRAC
                                            for j in range(len(tboxes)) if j != i)
                             emb, quality = None, 0.0
@@ -443,18 +387,14 @@ class BatchProcessor:
 
                     active_tids = {tid for tid, *_ in per_box}
                     ts_now = datetime.now(timezone.utc)
-                    # Siklus lokal kamera ini — dipakai buat gap-detection tracklet
-                    # (lihat TRACKLET_GAP_CYCLES) yang kebal lag pemrosesan, beda
-                    # dari wall-clock ts_now yang cuma dipakai buat MAX_DURATION
-                    # (safety net absolut) dan pencatatan waktu biasa.
+                    # idx = siklus lokal kamera, dipakai gap-detection tracklet (kebal
+                    # lag); ts_now cuma buat MAX_DURATION safety-net & timestamp biasa
                     idx = frame_idx[slot.camera_id] + 1
                     frame_idx[slot.camera_id] = idx
 
-                    # Kumpulkan bukti untuk tiap tracklet — keputusan identitas
-                    # baru diambil saat tracklet DITUTUP (lihat pipeline_service.py).
-                    # matching_ms nyaris 0 kecuali siklus ini nutup tracklet
-                    # (cosine-similarity asosiasi cuma jalan di close_expired->
-                    # _resolve_tracklet->associate(), bukan tiap frame — itu normal).
+                    # keputusan identitas baru diambil saat tracklet ditutup
+                    # (pipeline_service.py); matching_ms nyaris 0 kecuali siklus
+                    # ini nutup tracklet (cosine-similarity cuma jalan di situ)
                     _match_t0 = time.perf_counter()
                     for track_id, conf_val, x1, y1, x2, y2, emb, quality in per_box:
                         slot.db.observe(slot.camera_id, track_id, emb, quality, conf_val,
@@ -466,10 +406,8 @@ class BatchProcessor:
                     if closed:
                         self._finalize_tracklets(closed)
 
-                    # ── Prediction logging (mode file-playback saja) ──────────
-                    # Baris di-buffer per (cam,track_id) — baru ditulis ke CSV saat
-                    # tracklet-nya resolve (lihat _finalize_tracklets), supaya
-                    # person_pred berisi identitas akhir, bukan placeholder track_id.
+                    # mode file-playback: buffer per (cam,track_id), flush di
+                    # _finalize_tracklets supaya person_pred pakai identitas akhir
                     if slot.last_source_clip is not None:
                         for track_id, _, x1, y1, x2, y2, _, _ in per_box:
                             self._pred_logger.buffer(
@@ -478,7 +416,6 @@ class BatchProcessor:
                                 x1, y1, x2 - x1, y2 - y1,
                             )
 
-                    # ── Zone check (line-crossing + polygon dwell) ────────────
                     for zone in slot.zones:
                         zc_id = zone["zone_camera_id"]
 
@@ -497,8 +434,7 @@ class BatchProcessor:
                                         continue
                                     hist.append(side)
                                     if len(hist) >= 2 and hist[-2] * hist[-1] < 0:
-                                        # Cuma hitung kalau orang beneran lewat DI RUAS garis,
-                                        # bukan perpanjangannya (cross_side = garis tak-hingga).
+                                        # cross_side = garis tak-hingga; pastikan lewat di RUAS-nya
                                         if not within_segment_span(
                                             fx, fy,
                                             seg["p1"]["x"], seg["p1"]["y"],
@@ -506,10 +442,8 @@ class BatchProcessor:
                                         ):
                                             continue
                                         direction = "IN" if side * seg.get("in_sign", 1) > 0 else "OUT"
-                                        # Hysteresis: arah sama berturut-turut diabaikan
                                         if slot._last_dir.get(key) == direction:
                                             continue
-                                        # Cooldown: minimal CROSSING_COOLDOWN detik antar event per (garis, track)
                                         if now - slot._crossing_ts.get(key, 0.0) < CROSSING_COOLDOWN:
                                             continue
                                         slot._last_dir[key]    = direction
@@ -544,15 +478,10 @@ class BatchProcessor:
                                     slot.db.label_of(track_id, slot.camera_id),
                                 )
 
-                    # Clip state diupdate di sini; frame ditulis oleh _recorder_loop.
-                    # recent_lost: track ByteTrack yang baru hilang < REC_COAST_FRAMES
-                    # frame lalu — orang kemungkinan masih ada, YOLO cuma kedip.
-                    # Rekam selama ADA track hidup, TANPA syarat gerak (dulu ada
-                    # motion gate — dicabut: rekaman berhenti walau tracklet/
-                    # identitasnya masih dianggap hadir kalau orang cuma diam
-                    # sebentar, jadi jendela klip yang diminta clips.py bisa lebih
-                    # panjang dari klip yang beneran kerekam → thumbnail/bbox
-                    # nunjukkin momen yang gak ada di video yang diputar).
+                    # recent_lost: track baru hilang < REC_COAST_FRAMES lalu (YOLO
+                    # kedip, orang masih ada) — rekam selama ADA track hidup, tanpa
+                    # syarat gerak (motion gate dicabut: bikin klip lebih pendek
+                    # dari jendela yang diminta clips.py saat orang diam sebentar)
                     _tr = slot.tracker
                     recent_lost = any(
                         getattr(_tr, "frame_id", 0) - getattr(t, "end_frame", 0) <= REC_COAST_FRAMES
@@ -564,14 +493,10 @@ class BatchProcessor:
                          f"{slot.db.name_of(tid, slot.camera_id) or f'#{tid}'} {conf:.2f}")
                         for tid, conf, x1, y1, x2, y2, _, _ in per_box
                     ]
-                    # Rekaman disuplai LANGSUNG dari sini (frame yang barusan
-                    # dianalisis + box yang barusan dihitung), bukan dari thread
-                    # capture yang independen — box dijamin cocok sama framenya
-                    # karena satu paket yang sama, bukan dicocokkan belakangan
-                    # (percobaan sebelumnya berbasis exact-match/umur/toleransi
-                    # frame semuanya gagal: frame_q file-playlist TANPA BATAS,
-                    # jadi backlog batch loop vs rec_q yang independen bisa
-                    # menjauh tanpa batas sepanjang run, bukan cuma di awal).
+                    # frame+box disuplai langsung dari sini (bukan thread capture
+                    # independen) supaya box selalu cocok framenya — matching
+                    # belakangan by exact-match/umur/toleransi semuanya gagal karena
+                    # frame_q file-playlist tanpa batas bikin backlog menjauh tanpa batas
                     if slot.recorder is not None:   # None kalau skip_recording (evaluasi)
                         if slot.rec_q.full():
                             try:
@@ -610,18 +535,14 @@ class BatchProcessor:
                     if idx % 15 == 0:
                         slot.update_state(idx, slot.db.to_records())
 
-                # Crossing yang track-nya keburu hilang tanpa resolve → flush
-                # pakai label terbaik yg ada, biar occupancy count nggak meleset.
                 self._sweep_orphan_crossings(now)
 
         finally:
-            # Flush semua tracklet terbuka sebelum berhenti — kalau tidak,
-            # observasi yang sudah terkumpul hilang begitu saja tanpa POST.
+            # flush semua tracklet & crossing terbuka sebelum berhenti
             if self._slots:
                 closed = self._slots[0].db.close_all()
                 if closed:
                     self._finalize_tracklets(closed)
-            # Crossing sisa yang track-nya nggak keburu resolve → jangan hilang.
             self._sweep_orphan_crossings(time.time() + CROSSING_ORPHAN_AGE)
             for slot in self._slots:
                 slot.shutdown()
@@ -629,9 +550,7 @@ class BatchProcessor:
             self._latency_logger.close()
 
     def get_metrics(self) -> dict:
-        """System Health (plan2/spesifikasi.md Fase 2) — waktu predict() batch
-        terakhir & rata-rata, buat diagnosa kapan BatchProcessor mulai
-        keteteran sebelum FPS beneran drop."""
+        """Waktu predict() batch terakhir & rata-rata, buat diagnosa bottleneck."""
         ms = list(self._batch_ms)
         return {
             "last_batch_ms":    ms[-1] if ms else None,
@@ -645,9 +564,8 @@ class BatchProcessor:
                          ts: float, prov_label: "str | None") -> None:
         pc = {"zc_id": zc_id, "direction": direction, "zone_name": zone_name,
               "snap_url": snap_url, "fx": fx, "fy": fy, "ts": ts}
-        # OUT = orang keluar, track-nya biasanya langsung habis → jangan tunggu
-        # resolve (occupancy count harus turun cepat). Cuma IN yang di-buffer
-        # supaya awal rangkaian pergerakan dapat identitas final.
+        # OUT diposting langsung (occupancy harus turun cepat); IN dibuffer
+        # supaya dapat identitas final saat tracklet resolve
         if direction != "IN":
             self._post_crossing(cam_id, track_id, pc, prov_label or f"Unknown@{cam_id}")
             return
@@ -686,11 +604,8 @@ class BatchProcessor:
         )
 
     def _finalize_tracklets(self, closed: list[dict]) -> None:
-        """Tracklet baru saja ditutup (lihat pipeline_service.py._resolve_tracklet).
-        Simpan thumbnail sekali, lalu POST /detections + /tracklets (+ /camera-events
-        kalau identitas baru) — dilewati kalau _skip_backend_persist=True (evaluasi
-        terisolasi), supaya klip evaluasi tidak menulis baris baru ke persons/
-        detections/tracklets di database live."""
+        """POST /detections + /tracklets (+ /camera-events kalau identitas baru);
+        dilewati kalau _skip_backend_persist=True (evaluasi terisolasi)."""
         for result in closed:
             cam   = result["cam_id"]
             label = result["label"]
@@ -719,16 +634,11 @@ class BatchProcessor:
                         timestamp=result["ended_at"],
                         ai_latency_ms=self._last_ai_ms.get(cam),
                     )
-            # Tulis baris predictions.csv yang di-buffer selama tracklet ini
-            # terbuka, sekarang dengan nama akhir yang sudah resolve (§6).
-            # Tetap jalan walau _skip_backend_persist=True — inilah yang
-            # dibutuhkan evaluasi akurasi.
+            # tetap jalan walau _skip_backend_persist=True — dibutuhkan evaluasi akurasi
             self._pred_logger.flush((cam, result["track_id"]), result["display_name"])
             for frag_tid in result.get("folded_track_ids", ()):
                 self._pred_logger.flush((cam, frag_tid), result["display_name"])
 
-            # Crossing yang di-buffer selama tracklet ini terbuka → POST sekarang
-            # dengan label final (lihat _buffer_crossing).
             self._flush_crossings(
                 cam, [result["track_id"], *result.get("folded_track_ids", ())], label,
             )
@@ -743,9 +653,8 @@ class BatchProcessor:
                     description=f"Kamera {slot.camera_id} tidak merespons setelah 5 percobaan",
                 )
         else:
-            # Reconnect tidak me-rebuild BYTETracker — orang yang terekam sebelum
-            # putus koneksi kemungkinan besar sudah pergi. Tutup tracklet terbuka
-            # milik kamera ini (plan/07-fase2-detail.md §3).
+            # reconnect tidak rebuild tracker — tutup tracklet terbuka kamera ini,
+            # orang yang terekam sebelum putus kemungkinan sudah pergi
             closed = slot.db.close_all(cam_id=slot.camera_id)
             if closed:
                 self._finalize_tracklets(closed)

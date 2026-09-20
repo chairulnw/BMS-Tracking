@@ -25,18 +25,11 @@ import cv2
 import numpy as np
 
 CLIP_COOLDOWN  = 5.0
-# Klip < ini dibuang (file dihapus, TIDAK disimpan/diberi sidecar .dur) — bukan
-# gerakan orang beneran selesai, tapi giliran kamera ini abis (rantai
-# kronologis file-playlist) atau siklus deteksi kelewat lambat pas klip
-# sumbernya pendek, cuma sempat kepetik 1-2 frame sebelum MAX_FRAME_GAP nutup
-# paksa. Klip sepersekian detik begini nggak kepakai (nggak cukup buat
-# _find_clip nemuin momen yang diminta), cuma nyampah di output/clips/.
+# klip < ini dibuang (bukan gerakan selesai, tapi giliran kamera habis atau klip
+# sumber terlalu pendek) — nggak cukup buat _find_clip, cuma nyampah di clips/
 MIN_CLIP_SEC   = float(os.getenv("CLIP_MIN_DURATION_SEC", "1.0"))
-MAX_FRAME_GAP  = 3.0   # detik — gap nyata antar frame > ini → tutup klip (jangan
-                        # pegang frame terakhir berlama-lama)
-CLIP_MAX_DURATION = float(os.getenv("CLIP_MAX_DURATION", "90"))  # detik — klip
-                        # yang lewat ini di-segment (tutup + buka baru mulus).
-                        # Standar CCTV: nggak ada file 20-menit.
+MAX_FRAME_GAP  = 3.0   # detik — gap nyata antar frame > ini → tutup klip
+CLIP_MAX_DURATION = float(os.getenv("CLIP_MAX_DURATION", "90"))  # detik — segment klip lewat ini (standar CCTV)
 CLIPS_DIR      = Path("output/clips")
 # 1 → klip direkam dengan overlay bounding box + label; 0 → frame mentah.
 CLIP_BBOX_OVERLAY = os.getenv("CLIP_BBOX_OVERLAY", "0").lower() not in ("0", "false", "no", "")

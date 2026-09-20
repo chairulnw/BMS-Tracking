@@ -24,10 +24,7 @@ from app.services.stream_service.clip_recorder import _CLIP_STOP, ClipRecorder
 
 RECONNECT_TRIES = 5      # percobaan cepat sebelum lapor camera_offline
 RECONNECT_DELAY = 2.0    # jeda antar percobaan cepat
-# ponytail: interval tetap pasca-give-up, bukan exponential backoff — cukup
-# buat retry tanpa-batas (VMS lain umumnya begini); upgrade ke backoff kalau
-# reconnect storm (banyak kamera mati bareng) jadi masalah nyata.
-BACKGROUND_RETRY_DELAY = 30.0
+BACKGROUND_RETRY_DELAY = 30.0  # interval tetap pasca-give-up (bukan backoff — cukup buat retry tanpa-batas)
 
 
 def _camera_id_from_url(url: str) -> str:
@@ -95,28 +92,17 @@ class _CamSlot:
         self.height = 1080
 
         self._cap:        cv2.VideoCapture | None = None
-        # Sengaja dibatasi (bukan tanpa batas) — "proses frame TERBARU", buang
-        # yang lama begitu antrian penuh, biar sistem tetap responsif kalau
-        # inferensi sempat lambat, sama untuk RTSP live maupun file-playlist.
-        # Antrian tanpa batas sempat dicoba buat file-playlist (biar semua
-        # frame diproses), tapi itu bikin backlog numpuk kalau inferensi
-        # lambat: frame yang di video aslinya cuma berjarak sepersekian detik
-        # bisa keproses berdetik-detik terpisah di dunia nyata, bikin
-        # gap-detection tracklet (lihat TRACKLET_GAP_CYCLES di
-        # pipeline_service.py) salah nutup tracklet yang sebenarnya masih satu
-        # momen. Ukuran 5 (bukan 2) beri sedikit ruang toleransi jitter tanpa
-        # balik ke backlog tak terbatas — kalau inferensi konsisten lebih
-        # lambat dari laju capture, antrian ini akan tetap penuh & drop juga.
+        # Dibatasi (bukan tak terbatas) — proses frame TERBARU, buang yang lama
+        # kalau penuh. Antrian tak terbatas dicoba untuk file-playlist tapi bikin
+        # backlog: frame yang di video aslinya berjarak sepersekian detik bisa
+        # keproses berdetik-detik terpisah, salah-nutup gap-detection tracklet
+        # (TRACKLET_GAP_CYCLES di pipeline_service.py). Ukuran 5 beri toleransi
+        # jitter tanpa balik ke backlog tak terbatas.
         self.frame_q:     queue.Queue             = queue.Queue(maxsize=5)
-        # Diisi LANGSUNG oleh BatchProcessor tiap siklus dengan
-        # (frame, has_person, annots) — frame yang barusan dianalisis, bareng
-        # box yang barusan dihitung buat frame itu juga, satu paket atomik.
-        # Bukan diisi thread capture (lihat riwayat bug di komentar
-        # batch_processor.py dekat pemanggilnya): capture jauh lebih cepat
-        # dari analisis, jadi kalau rec_q disuplai independen dari capture,
-        # box yang dihitung belakangan (siklus batch) gak akan pernah cocok
-        # sama frame yang lagi direkam (sudah dicoba 3 pendekatan beda,
-        # semuanya gagal untuk alasan yang sama).
+        # Diisi LANGSUNG oleh BatchProcessor tiap siklus dengan (frame, has_person,
+        # annots) sebagai satu paket atomik — bukan thread capture, karena capture
+        # jauh lebih cepat dari analisis dan box akan selalu telat vs frame kalau
+        # disuplai independen (3 pendekatan lain sudah dicoba, semua gagal).
         self.rec_q:       queue.Queue             = queue.Queue(maxsize=90)
         self._rec_thread: threading.Thread | None = None
         self._cap_stop:   threading.Event         = threading.Event()

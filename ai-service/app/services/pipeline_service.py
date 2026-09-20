@@ -34,12 +34,9 @@ BUFFER_FRAMES      = 10
 NEAR_LINE_DIST     = 40
 MIN_CROP_PX        = 32
 MIN_MARGIN         = 0.04   # gap minimum top1-top2 untuk confident match
-SEED_MIN_COHERENCE = 0.35   # tracklet yang mau jadi identitas BARU: cosine PAIRWISE
-                            # TERENDAH antar sample-nya harus >= ini. Rendah = ada
-                            # sample yang jauh dari yang lain (box kadang isi 2 orang /
-                            # occlusion berat) → embedding mean degenerate → kalau jadi
-                            # bibit jadi "magnet". Angka aktual muncul di log [reid],
-                            # tune dari situ.
+SEED_MIN_COHERENCE = 0.35   # tracklet identitas BARU: cosine pairwise terendah antar
+                            # sample-nya harus >= ini (rendah = sample tercampur/occlusion
+                            # → embedding mean degenerate jadi "magnet"). Tune dari log [reid].
 MAX_BANK_SIZE      = 5      # maks entry per identitas di bank embedding
 BANK_MERGE_SIM     = 0.90   # sim >= ini → update entry lama, bukan tambah baru
 BANK_EXPAND_MIN    = 0.67   # skor match tracklet >= ini → boleh tambah prototipe bank baru
@@ -65,33 +62,19 @@ def _debug_reid() -> bool:
 # dihidupkan lagi).
 # ASSOC_THRESHOLD didefinisikan di app.schemas (satu sumber, dipakai juga sebagai
 # default reid_threshold di ProcessVideoRequest/StreamStartRequest).
-TRACKLET_GAP_CYCLES    = 15       # siklus LOKAL kamera ini (frame_idx per kamera, lihat
-                                   # batch_processor.py) berturut-turut tanpa track ini → tutup
-                                   # tracklet. BUKAN wall-clock — wall-clock (`datetime.now()`)
-                                   # rapuh kalau ada backlog frame_q: frame yang di video aslinya
-                                   # cuma berjarak sepersekian detik bisa keproses berdetik-detik
-                                   # terpisah di dunia nyata gara-gara antrian numpuk, salah
-                                   # kebaca sebagai "orangnya udah pergi". Siklus lokal ngukur
-                                   # progres video itu sendiri, kebal terhadap lag pemrosesan.
-                                   # Konsekuensi: kamera yang idle lama nunggu giliran kamera lain
-                                   # (rantai kronologis file-playlist) juga gak nambah siklus,
-                                   # tapi itu memang klip/momen berbeda — wajar tracklet-nya tutup.
+TRACKLET_GAP_CYCLES    = 15       # siklus LOKAL kamera (frame_idx, lihat batch_processor.py)
+                                   # tanpa track ini → tutup tracklet. Bukan wall-clock: itu
+                                   # rapuh terhadap backlog frame_q (lag pemrosesan salah
+                                   # kebaca sebagai "orang sudah pergi").
 TRACKLET_MAX_DURATION  = 600.0    # detik — tutup paksa + buka tracklet baru dengan key sama
 TRACKLET_MAX_SAMPLES   = 16       # maks embedding disimpan per tracklet (top-K by quality)
 TRACKLET_MAX_POSITIONS = 120      # maks titik kaki disimpan per tracklet (garis lintasan/heatmap)
-# Fold fragmen tracker: di RTSP FPS rendah, 1 orang bisa dipecah jadi >1 track_id
-# yang overlap waktu di kamera SAMA. Tracklet pendek (n_det <= MAX) yang jadi NEW
-# tapi overlap waktu dgn tracklet terbuka lain (lebih panjang) di kamera sama, dan
-# embedding-nya tidak jelas beda orang (>= MIN_SIM), dilipat ke tracklet terbuka
-# itu — bukan bikin identitas terpisah. Bar SIM longgar: prior spatio-temporal kuat.
+# Fold fragmen tracker: FPS rendah bisa pecah 1 orang jadi >1 track_id yang
+# overlap waktu di kamera sama. Tracklet pendek (n_det<=MAX) yang overlap waktu
+# dgn tracklet terbuka lain dan embedding tak jelas beda orang (>=MIN_SIM)
+# dilipat ke situ, bukan jadi identitas baru — bar SIM longgar, prior spatial kuat.
 CONCURRENT_FRAGMENT_MAX_DET = 12
 CONCURRENT_FRAGMENT_MIN_SIM = 0.52
-# ponytail: cap keras + FIFO drop titik TERTUA kalau kepenuhan — cukup buat tracklet
-# normal (detik-menit). Kalau nanti perlu path presisi untuk tracklet super panjang
-# (mendekati TRACKLET_MAX_DURATION), ganti ke downsampling merata bukan FIFO.
-# ponytail: top-K by quality, linear scan atas TRACKLET_MAX_SAMPLES entri. Kalau
-# nanti butuh keragaman pose (bukan sekadar ketajaman), ganti ke clustering —
-# tapi jangan sebelum ada bukti top-K saja tidak cukup.
 
 
 @dataclass
@@ -196,13 +179,10 @@ class IdentityDB:
         conf: float, frame: "np.ndarray | None", x1: int, y1: int, x2: int, y2: int,
         ts: datetime, cycle: int = 0,
     ) -> None:
-        """Kumpulkan bukti untuk tracklet ini. Dipanggil tiap box per siklus
-        batch, termasuk box yang gagal quality gate (emb None) atau conf <
-        SAMPLE_MIN_CONF — itu tetap menaikkan n_det, last_seen, titik lintasan
-        tapi TIDAK menambah sample embedding (conf ganda: 0.45 buat deteksi+
-        tracking+rekam, 0.66 buat bukti identitas). `cycle` = siklus lokal
-        kamera ini (lihat batch_processor.py), dipakai close_expired() buat
-        gap-detection yang kebal lag pemrosesan (lihat TRACKLET_GAP_CYCLES)."""
+        """Kumpulkan bukti tracklet tiap box per siklus, termasuk box yang gagal
+        quality gate atau conf < SAMPLE_MIN_CONF (naikkan n_det/last_seen/posisi
+        tapi tidak menambah sample embedding). `cycle` = siklus lokal kamera,
+        dipakai close_expired() untuk gap-detection kebal lag (TRACKLET_GAP_CYCLES)."""
         key = self._key(track_id, cam_id)
         tl = self._open.get(key)
         if tl is None:
@@ -308,11 +288,8 @@ class IdentityDB:
         """score = cosine similarity murni terhadap bank embedding tiap orang.
         Return: (match_atau_None, top1_name, top1_score, top2_name, top2_score).
         match None kalau top1 < threshold atau margin top1-top2 < MIN_MARGIN.
-        ponytail: hard constraint interval-overlap (dua tracklet beririsan
-        waktu di kamera sama tidak pernah dianggap orang yang sama) dicabut
-        atas permintaan eksplisit — sekarang murni threshold+margin di bawah,
-        gak ada guard lain. Konsekuensi yang sudah didiskusikan: dua orang
-        beda yang crossing berdekatan bisa ke-gabung jadi satu identitas."""
+        Tidak ada guard interval-overlap: dua tracklet beririsan waktu di kamera
+        sama BISA dianggap orang yang sama (murni threshold+margin)."""
         best_name, best_score = None, -1.0
         second_name, second_score = None, -1.0
         for name, bank in self._embeddings.items():

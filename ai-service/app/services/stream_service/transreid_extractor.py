@@ -31,11 +31,9 @@ _IMG_SIZE    = (256, 128)   # (H, W) — samain dengan INPUT.SIZE_TEST config
 _MEAN = torch.tensor([0.5, 0.5, 0.5]).view(1, 3, 1, 1)   # PIXEL_MEAN/STD config (bukan ImageNet)
 _STD  = torch.tensor([0.5, 0.5, 0.5]).view(1, 3, 1, 1)
 
-# Nama package top-level TransReID/ (config, model, loss, ...) yang generik dan
-# tabrakan sama modul lain di app/ (mis. app/par/clip/model.py juga
-# `from config import ...`, lihat par_service.py). sys.modules cache import
-# by name, bukan by path, jadi buka sys.path doang nggak cukup — begitu
-# `import config` kepanggil sekali, cache-nya nempel biarpun path udah dicabut.
+# Nama generik yang tabrakan sama modul lain di app/ (par_service.py juga
+# `from config import ...`) — sys.modules cache by name, jadi harus di-evict
+# manual, bukan cukup ubah sys.path.
 _TRANSREID_TOP_PKGS = {"config", "datasets", "loss", "model", "processor", "solver", "utils"}
 
 
