@@ -25,6 +25,8 @@ predictions_runs/
 predictions_runs_current/
 archive/
 reports/
+benchmark/
+bms-tracking-2026-09-10-133024/
 
 # macOS
 .DS_Store
