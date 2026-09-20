@@ -25,6 +25,13 @@ import cv2
 import numpy as np
 
 CLIP_COOLDOWN  = 5.0
+# Klip < ini dibuang (file dihapus, TIDAK disimpan/diberi sidecar .dur) — bukan
+# gerakan orang beneran selesai, tapi giliran kamera ini abis (rantai
+# kronologis file-playlist) atau siklus deteksi kelewat lambat pas klip
+# sumbernya pendek, cuma sempat kepetik 1-2 frame sebelum MAX_FRAME_GAP nutup
+# paksa. Klip sepersekian detik begini nggak kepakai (nggak cukup buat
+# _find_clip nemuin momen yang diminta), cuma nyampah di output/clips/.
+MIN_CLIP_SEC   = float(os.getenv("CLIP_MIN_DURATION_SEC", "1.0"))
 MAX_FRAME_GAP  = 3.0   # detik — gap nyata antar frame > ini → tutup klip (jangan
                         # pegang frame terakhir berlama-lama)
 CLIP_MAX_DURATION = float(os.getenv("CLIP_MAX_DURATION", "90"))  # detik — klip
@@ -233,6 +240,14 @@ class ClipRecorder:
 
         if path is None:
             return
+        if dur < MIN_CLIP_SEC:
+            print(f"[clip:{self._camera_id}] BUANG {path.name}  {dur:.2f}s < {MIN_CLIP_SEC}s "
+                  f"(giliran kamera abis / siklus deteksi kelewat lambat, bukan orang beneran hilang)")
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                print(f"[clip:{self._camera_id}] gagal hapus klip terlalu pendek ({path.name}): {exc}")
+            return
         size = path.stat().st_size if path.exists() else 0
         print(f"[clip:{self._camera_id}] SAVED {path.name}  {dur:.1f}s  frames={frames}  size={size//1024}KB")
         try:
@@ -276,6 +291,16 @@ def _demo() -> None:
         wall = seq[-1] - t0  # ~3.47s
         # durasi klip harus ngikut `now` span (real-time), bukan jumlah frame source
         assert abs(n / OUT_FPS - wall) < 0.3, f"durasi {n/OUT_FPS:.2f}s (frames={n}) jauh dari wall {wall:.2f}s"
+
+        # Klip < MIN_CLIP_SEC (mis. giliran kamera abis / gap sesaat) dibuang,
+        # bukan disimpan sebagai file sepersekian detik.
+        rec2 = ClipRecorder("test2", fps=10.0, width=64, height=48)
+        t1 = 2000.0
+        for i in range(5):   # ~0.17s < MIN_CLIP_SEC — harus dibuang
+            rec2.update(f, has_person=True, now=t1 + i / 30)
+        rec2._emit_until(t1 + 4 / 30)
+        rec2.force_stop()
+        assert list(Path(tmp).glob("clip_test2_*.mp4")) == [], "klip < MIN_CLIP_SEC seharusnya dibuang, bukan disimpan"
     finally:
         CLIPS_DIR = orig_dir
         shutil.rmtree(tmp, ignore_errors=True)

@@ -65,12 +65,17 @@ def _debug_reid() -> bool:
 # dihidupkan lagi).
 # ASSOC_THRESHOLD didefinisikan di app.schemas (satu sumber, dipakai juga sebagai
 # default reid_threshold di ProcessVideoRequest/StreamStartRequest).
-TRACKLET_GAP_SECONDS   = 2.0      # detik wall-clock tanpa track ini → tutup tracklet. Wall-clock,
-                                   # BUKAN hitungan siklus (dulu TRACKLET_GAP_CYCLES=15 siklus) —
-                                   # siklus cuma nambah kalau kamera ini dapet frame baru, jadi
-                                   # kamera yang lagi nganggur (mis. gantian klip lintas kamera di
-                                   # file-playlist, lihat stream_manager.py) nggak pernah dianggap
-                                   # expired walau diam berapa menit sekalipun.
+TRACKLET_GAP_CYCLES    = 15       # siklus LOKAL kamera ini (frame_idx per kamera, lihat
+                                   # batch_processor.py) berturut-turut tanpa track ini → tutup
+                                   # tracklet. BUKAN wall-clock — wall-clock (`datetime.now()`)
+                                   # rapuh kalau ada backlog frame_q: frame yang di video aslinya
+                                   # cuma berjarak sepersekian detik bisa keproses berdetik-detik
+                                   # terpisah di dunia nyata gara-gara antrian numpuk, salah
+                                   # kebaca sebagai "orangnya udah pergi". Siklus lokal ngukur
+                                   # progres video itu sendiri, kebal terhadap lag pemrosesan.
+                                   # Konsekuensi: kamera yang idle lama nunggu giliran kamera lain
+                                   # (rantai kronologis file-playlist) juga gak nambah siklus,
+                                   # tapi itu memang klip/momen berbeda — wajar tracklet-nya tutup.
 TRACKLET_MAX_DURATION  = 600.0    # detik — tutup paksa + buka tracklet baru dengan key sama
 TRACKLET_MAX_SAMPLES   = 16       # maks embedding disimpan per tracklet (top-K by quality)
 TRACKLET_MAX_POSITIONS = 120      # maks titik kaki disimpan per tracklet (garis lintasan/heatmap)
@@ -95,6 +100,7 @@ class Tracklet:
     track_id:   int
     started_at: datetime
     last_seen:  datetime
+    last_cycle: int                       = 0   # siklus lokal kamera saat observe() terakhir
     n_det:      int                       = 0
     samples:    list                      = field(default_factory=list)  # [(emb, quality)], disebar merata sepanjang tracklet
     sample_ts:  list                      = field(default_factory=list)  # epoch tiap sample, lockstep dgn samples
@@ -188,20 +194,23 @@ class IdentityDB:
     def observe(
         self, cam_id: str, track_id: int, emb: "np.ndarray | None", quality: float,
         conf: float, frame: "np.ndarray | None", x1: int, y1: int, x2: int, y2: int,
-        ts: datetime,
+        ts: datetime, cycle: int = 0,
     ) -> None:
         """Kumpulkan bukti untuk tracklet ini. Dipanggil tiap box per siklus
         batch, termasuk box yang gagal quality gate (emb None) atau conf <
         SAMPLE_MIN_CONF — itu tetap menaikkan n_det, last_seen, titik lintasan
         tapi TIDAK menambah sample embedding (conf ganda: 0.45 buat deteksi+
-        tracking+rekam, 0.66 buat bukti identitas)."""
+        tracking+rekam, 0.66 buat bukti identitas). `cycle` = siklus lokal
+        kamera ini (lihat batch_processor.py), dipakai close_expired() buat
+        gap-detection yang kebal lag pemrosesan (lihat TRACKLET_GAP_CYCLES)."""
         key = self._key(track_id, cam_id)
         tl = self._open.get(key)
         if tl is None:
             tl = Tracklet(cam_id=cam_id or self._camera_id, track_id=track_id,
-                           started_at=ts, last_seen=ts)
+                           started_at=ts, last_seen=ts, last_cycle=cycle)
             self._open[key] = tl
         tl.last_seen = ts
+        tl.last_cycle = cycle
         tl.n_det += 1
         if conf > tl.best_conf and frame is not None:
             tl.best_conf = conf
@@ -258,15 +267,17 @@ class IdentityDB:
         """Dipanggil tiap siklus batch yang dapet frame baru untuk kamera ini."""
         self._active_tracks[cam_id] = set(track_ids)
 
-    def close_expired(self, cam_id: str, now: "datetime | None" = None) -> list[dict]:
-        """Tutup tracklet kamera ini yang track-nya hilang >= TRACKLET_GAP_SECONDS
-        wall-clock, atau yang sudah melebihi TRACKLET_MAX_DURATION (lalu langsung
-        buka tracklet baru dengan key sama — track-nya masih hidup)."""
+    def close_expired(self, cam_id: str, now: "datetime | None" = None,
+                       cycle: int = 0) -> list[dict]:
+        """Tutup tracklet kamera ini yang track-nya hilang >= TRACKLET_GAP_CYCLES
+        siklus lokal, atau yang sudah melebihi TRACKLET_MAX_DURATION wall-clock
+        (lalu langsung buka tracklet baru dengan key sama — track-nya masih
+        hidup). `cycle` = siklus lokal kamera ini SAAT INI (lihat observe())."""
         now = now or datetime.now(timezone.utc)
         closed: list[dict] = []
         for key in [k for k in list(self._open) if k[0] == cam_id]:
             tl = self._open[key]
-            gap_expired      = (now - tl.last_seen).total_seconds() >= TRACKLET_GAP_SECONDS
+            gap_expired      = (cycle - tl.last_cycle) >= TRACKLET_GAP_CYCLES
             duration_expired = (now - tl.started_at).total_seconds() > TRACKLET_MAX_DURATION
             if not (gap_expired or duration_expired):
                 continue
@@ -276,7 +287,7 @@ class IdentityDB:
                 closed.append(result)
             if duration_expired and not gap_expired:
                 self._open[key] = Tracklet(cam_id=tl.cam_id, track_id=tl.track_id,
-                                            started_at=now, last_seen=now)
+                                            started_at=now, last_seen=now, last_cycle=cycle)
         return closed
 
     def close_all(self, cam_id: "str | None" = None) -> list[dict]:
@@ -363,6 +374,10 @@ class IdentityDB:
 
     def _resolve_tracklet(self, tl: Tracklet) -> "dict | None":
         if len(tl.samples) < 5:
+            ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            print(f"[reid] {ts} {tl.cam_id}/t{tl.track_id} tracklet ditutup "
+                  f"({tl.n_det} det, {len(tl.samples)} sample) → BUANG "
+                  f"(< 5 crop berkualitas, bukti visual terlalu tipis)")
             return None  # < 5 crop berkualitas — bukti visual terlalu tipis, buang (tidak ada POST)
 
         emb = self._tl_mean_emb(tl)

@@ -8,7 +8,7 @@ import numpy as np
 
 from app.services.pipeline_service import (
     ASSOC_THRESHOLD,
-    TRACKLET_GAP_SECONDS,
+    TRACKLET_GAP_CYCLES,
     Tracklet,
     IdentityDB,
 )
@@ -140,32 +140,39 @@ def test_non_overlapping_regardless_of_resolve_order_still_matches():
     print(f"  ok: resolve-order tidak berpengaruh, tetap match ({name!r}, score={score:.3f})")
 
 
-def test_close_expired_uses_wall_clock_not_update_cycles():
-    """close_expired() harus tutup tracklet berdasarkan selisih WAKTU ASLI sejak
-    last_seen, walau update_active() tidak pernah dipanggil di antaranya (kamera
-    idle nunggu giliran kamera lain di rantai kronologis file-playlist — lihat
-    TRACKLET_GAP_SECONDS). Kalau closure masih berbasis hitungan siklus
-    (update_active), tracklet ini TIDAK AKAN tertutup di sini karena
-    update_active() sama sekali tidak dipanggil pada test ini."""
+def test_close_expired_uses_local_cycle_not_wall_clock():
+    """close_expired() harus tutup tracklet berdasarkan selisih SIKLUS LOKAL
+    kamera (lihat TRACKLET_GAP_CYCLES), BUKAN wall-clock — wall-clock rapuh
+    kalau frame_q ada backlog (frame yang di video cuma berjarak sepersekian
+    detik bisa keproses berdetik-detik terpisah di dunia nyata gara-gara
+    antrian numpuk, salah kebaca sebagai 'orangnya udah pergi'). Test ini
+    sengaja pakai jeda wall-clock BESAR antar observe() (simulasi backlog)
+    tapi siklus lokal cuma naik dikit — tracklet HARUS tetap dianggap hidup
+    selama gap siklusnya < TRACKLET_GAP_CYCLES, walau wall-clock-nya jauh."""
     db = IdentityDB(reid_threshold=ASSOC_THRESHOLD)
     t0 = datetime(2026, 9, 19, 16, 0, tzinfo=timezone.utc)
 
     key = ("c1", 1)
-    tl = Tracklet(cam_id="c1", track_id=1, started_at=t0, last_seen=t0)
+    tl = Tracklet(cam_id="c1", track_id=1, started_at=t0, last_seen=t0, last_cycle=10)
     tl.samples = [(_unit(1), 500.0)] * 5   # _resolve_tracklet butuh >= 5 sample
     tl.n_det = 5
     db._open[key] = tl
 
-    # Cek sebelum gap terlampaui → belum ditutup.
-    still_open = db.close_expired("c1", t0 + timedelta(seconds=TRACKLET_GAP_SECONDS - 0.5))
-    assert still_open == [], "belum lewat TRACKLET_GAP_SECONDS, seharusnya belum ditutup"
+    # Wall-clock lompat jauh (simulasi backlog pemrosesan), tapi siklus lokal
+    # cuma naik dikit (< TRACKLET_GAP_CYCLES) → tracklet HARUS tetap hidup.
+    still_open = db.close_expired(
+        "c1", t0 + timedelta(minutes=5), cycle=10 + TRACKLET_GAP_CYCLES - 1,
+    )
+    assert still_open == [], "gap siklus lokal belum terlampaui, seharusnya belum ditutup walau wall-clock jauh"
     assert key in db._open
 
-    # Lewat gap, TANPA update_active() sama sekali → tetap harus ditutup.
-    closed = db.close_expired("c1", t0 + timedelta(seconds=TRACKLET_GAP_SECONDS + 0.5))
-    assert len(closed) == 1, "tracklet idle > TRACKLET_GAP_SECONDS harus ditutup walau update_active() tidak pernah dipanggil"
+    # Siklus lokal lewat ambang → tetap ditutup, terlepas dari wall-clock.
+    closed = db.close_expired(
+        "c1", t0 + timedelta(minutes=5), cycle=10 + TRACKLET_GAP_CYCLES,
+    )
+    assert len(closed) == 1, "gap siklus lokal >= TRACKLET_GAP_CYCLES harus ditutup"
     assert key not in db._open
-    print(f"  ok: tracklet ditutup murni dari selisih waktu ({TRACKLET_GAP_SECONDS}s), bukan hitungan siklus")
+    print(f"  ok: tracklet ditutup murni dari selisih siklus lokal ({TRACKLET_GAP_CYCLES}), kebal lag wall-clock")
 
 
 if __name__ == "__main__":
@@ -175,7 +182,7 @@ if __name__ == "__main__":
         test_empty_samples_discarded,
         test_count_restored_after_gallery_reload,
         test_non_overlapping_regardless_of_resolve_order_still_matches,
-        test_close_expired_uses_wall_clock_not_update_cycles,
+        test_close_expired_uses_local_cycle_not_wall_clock,
     ]
     for t in tests:
         print(f"{t.__name__} ...")

@@ -443,6 +443,12 @@ class BatchProcessor:
 
                     active_tids = {tid for tid, *_ in per_box}
                     ts_now = datetime.now(timezone.utc)
+                    # Siklus lokal kamera ini — dipakai buat gap-detection tracklet
+                    # (lihat TRACKLET_GAP_CYCLES) yang kebal lag pemrosesan, beda
+                    # dari wall-clock ts_now yang cuma dipakai buat MAX_DURATION
+                    # (safety net absolut) dan pencatatan waktu biasa.
+                    idx = frame_idx[slot.camera_id] + 1
+                    frame_idx[slot.camera_id] = idx
 
                     # Kumpulkan bukti untuk tiap tracklet — keputusan identitas
                     # baru diambil saat tracklet DITUTUP (lihat pipeline_service.py).
@@ -452,10 +458,10 @@ class BatchProcessor:
                     _match_t0 = time.perf_counter()
                     for track_id, conf_val, x1, y1, x2, y2, emb, quality in per_box:
                         slot.db.observe(slot.camera_id, track_id, emb, quality, conf_val,
-                                        frame, x1, y1, x2, y2, ts_now)
+                                        frame, x1, y1, x2, y2, ts_now, cycle=idx)
 
                     slot.db.update_active(slot.camera_id, active_tids)
-                    closed = slot.db.close_expired(slot.camera_id, ts_now)
+                    closed = slot.db.close_expired(slot.camera_id, ts_now, cycle=idx)
                     matching_ms = (time.perf_counter() - _match_t0) * 1000
                     if closed:
                         self._finalize_tracklets(closed)
@@ -577,9 +583,6 @@ class BatchProcessor:
                         except queue.Full:
                             pass
 
-                    idx = frame_idx[slot.camera_id] + 1
-                    frame_idx[slot.camera_id] = idx
-
                     self._last_ai_ms[slot.camera_id] = (
                         slot.last_decode_ms + detection_ms + tracking_ms + reid_ms + matching_ms
                     )
@@ -610,18 +613,6 @@ class BatchProcessor:
                 # Crossing yang track-nya keburu hilang tanpa resolve → flush
                 # pakai label terbaik yg ada, biar occupancy count nggak meleset.
                 self._sweep_orphan_crossings(now)
-
-                # Tutup tracklet yang expired (gap waktu / durasi maks) untuk
-                # SEMUA kamera, termasuk yang lagi is_new=False siklus ini (mis.
-                # nunggu giliran kamera lain di rantai kronologis file-playlist)
-                # — close_expired() di dalam loop per-kamera di atas cuma jalan
-                # buat kamera yang dapet frame baru, jadi kamera yang lagi diam
-                # gak pernah sempat dicek sampai frame berikutnya datang.
-                _sweep_now = datetime.now(timezone.utc)
-                for slot in self._slots:
-                    closed = slot.db.close_expired(slot.camera_id, _sweep_now)
-                    if closed:
-                        self._finalize_tracklets(closed)
 
         finally:
             # Flush semua tracklet terbuka sebelum berhenti — kalau tidak,

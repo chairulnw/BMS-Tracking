@@ -49,6 +49,11 @@ class StreamStartRequest(BaseModel):
     # gallery hari ini TIDAK dipulihkan dari DB, IdentityDB mulai kosong.
     # Default false: perilaku produksi tidak berubah.
     skip_gallery_restore:  bool              = False
+    # Independen dari skip_gallery_restore — default ngikut skip_gallery_restore
+    # kalau None (perilaku lama: evaluasi terisolasi juga skip rekaman klip).
+    # Set eksplisit False kalau mau tetap terisolasi (skip_gallery_restore=True)
+    # TAPI tetap ngerekam klip ber-bbox buat verifikasi visual hasil.
+    skip_recording:        "bool | None"     = None
 
 
 class RenameRequest(BaseModel):

@@ -49,8 +49,11 @@ class StreamManager:
         conf_threshold: float,
         reid_threshold: float,
         line           = None,   # legacy, tidak digunakan — garis diambil dari DB
-        skip_gallery_restore: bool = False,   # True untuk evaluasi terisolasi
+        skip_gallery_restore: bool = False,          # True untuk evaluasi terisolasi
+        skip_recording: "bool | None" = None,   # None → ikut skip_gallery_restore (perilaku lama)
     ) -> None:
+        if skip_recording is None:
+            skip_recording = skip_gallery_restore
         if self._running:
             raise RuntimeError("Stream sudah berjalan. Panggil /stream/stop dulu.")
 
@@ -86,7 +89,7 @@ class StreamManager:
                     reid_threshold    = reid_threshold,
                     stop_event        = self._stop_event,
                     analytics_enabled = cfg.get("analytics_enabled", True),
-                    skip_recording    = skip_gallery_restore,
+                    skip_recording    = skip_recording,
                 )
                 for cfg in cam_configs
             ]

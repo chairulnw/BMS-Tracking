@@ -15,6 +15,7 @@ def stream_start(req: StreamStartRequest, request: Request) -> StreamStatusRespo
             conf_threshold=req.conf_threshold,
             reid_threshold=req.reid_threshold,
             skip_gallery_restore=req.skip_gallery_restore,
+            skip_recording=req.skip_recording,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))

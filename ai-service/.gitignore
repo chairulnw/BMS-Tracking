@@ -28,3 +28,11 @@ predictions_runs_current/
 .DS_Store
 # Runtime logs
 *.log
+
+# Secrets / credentials
+.cam_rtsp_backup.sql
+auto.crt
+auto.key
+
+# Vendored checkpoints (large binaries)
+checkpoints/

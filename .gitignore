@@ -6,3 +6,7 @@ plan/
 
 .DS_Store
 .obsidian/
+
+# Contains hardcoded RTSP credentials
+record_rtsp.py
+record_rtsp.sh

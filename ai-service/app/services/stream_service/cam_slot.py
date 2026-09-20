@@ -95,20 +95,19 @@ class _CamSlot:
         self.height = 1080
 
         self._cap:        cv2.VideoCapture | None = None
-        # RTSP live: sengaja kecil (2) — "selalu proses frame TERBARU", buang
-        # yang lama, biar sistem gak numpuk antrian & tetap responsif kalau
-        # inferensi sempat lambat. Mode file-playlist (evaluasi/testing) mau
-        # SEMUA frame diproses, bukan cuma yang terbaru — buffer kecil di situ
-        # cuma bikin banyak frame dibuang walau inferensinya sendiri gak
-        # kewalahan (terbukti: predictions.csv kehilangan 16-92% frame padahal
-        # klip rekaman via rec_q, buffer 90, hampir gak kehilangan apa-apa).
-        # File terbatas (bukan stream tanpa akhir), jadi aman dibikin tanpa
-        # batas — gak akan numpuk selamanya kayak RTSP live yang gak berhenti.
-        # PLAYLIST_LIVE_SIM=1: paksa file-playlist pakai antrian kecil (kayak
-        # RTSP live) buat simulasi kondisi operasional 24/7 yang drop frame
-        # berkelanjutan — dipakai buat benchmark, default tetap unbounded.
-        _live_sim = os.getenv("PLAYLIST_LIVE_SIM", "0") == "1"
-        self.frame_q:     queue.Queue             = queue.Queue(maxsize=2 if (not self._playlist or _live_sim) else 0)
+        # Sengaja dibatasi (bukan tanpa batas) — "proses frame TERBARU", buang
+        # yang lama begitu antrian penuh, biar sistem tetap responsif kalau
+        # inferensi sempat lambat, sama untuk RTSP live maupun file-playlist.
+        # Antrian tanpa batas sempat dicoba buat file-playlist (biar semua
+        # frame diproses), tapi itu bikin backlog numpuk kalau inferensi
+        # lambat: frame yang di video aslinya cuma berjarak sepersekian detik
+        # bisa keproses berdetik-detik terpisah di dunia nyata, bikin
+        # gap-detection tracklet (lihat TRACKLET_GAP_CYCLES di
+        # pipeline_service.py) salah nutup tracklet yang sebenarnya masih satu
+        # momen. Ukuran 5 (bukan 2) beri sedikit ruang toleransi jitter tanpa
+        # balik ke backlog tak terbatas — kalau inferensi konsisten lebih
+        # lambat dari laju capture, antrian ini akan tetap penuh & drop juga.
+        self.frame_q:     queue.Queue             = queue.Queue(maxsize=5)
         # Diisi LANGSUNG oleh BatchProcessor tiap siklus dengan
         # (frame, has_person, annots) — frame yang barusan dianalisis, bareng
         # box yang barusan dihitung buat frame itu juga, satu paket atomik.

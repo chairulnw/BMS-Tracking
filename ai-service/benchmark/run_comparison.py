@@ -93,6 +93,8 @@ COMBOS = [
     (25, "RTDETRv2-s", "rtdetr-l.pt", "OC-SORT",   "ocsort",    "OSNet",                "osnet_ain_x1_0"),
     (26, "RTDETRv2-s", "rtdetr-l.pt", "OC-SORT",   "ocsort",    "TransReID (ViT-B/16*)", "transreid"),
     (27, "RTDETRv2-s", "rtdetr-l.pt", "OC-SORT",   "ocsort",    "BoT (ResNet50)",        "bot_resnet50"),
+    (28, "YOLO26x",    "yolo26x.pt",  "ByteTrack", "bytetrack", "TransReID (ViT-B/16*)", "transreid"),
+    (29, "YOLO26s",    "yolo26s.pt",  "ByteTrack", "bytetrack", "TransReID (ViT-B/16*)", "transreid"),
 ]
 
 
@@ -105,7 +107,8 @@ def wait_for(predicate, timeout: float, what: str) -> None:
     raise TimeoutError(f"timeout menunggu {what}")
 
 
-def run_one(idx: int, detector_model: str, tracker_type: str, reid_model: str) -> dict:
+def run_one(idx: int, detector_model: str, tracker_type: str, reid_model: str,
+            record: bool = False) -> dict:
     env = os.environ.copy()
     env["DETECTOR_MODEL"]    = detector_model
     env["TRACKER_TYPE"]     = tracker_type
@@ -139,7 +142,8 @@ def run_one(idx: int, detector_model: str, tracker_type: str, reid_model: str) -
         # timeout tinggi: /stream/start me-load model Re-ID kedua kalinya (cache
         # StreamManager terpisah dari app.state), yang buat TransReID (ViT-B,
         # 86M param + first-run MPS kernel compile) bisa >15s.
-        r = requests.post(f"{BASE_URL}/stream/start", json={"skip_gallery_restore": True},
+        r = requests.post(f"{BASE_URL}/stream/start",
+                           json={"skip_gallery_restore": True, "skip_recording": not record},
                            headers=_AUTH_HEADERS, timeout=120)
         r.raise_for_status()
 
@@ -243,15 +247,17 @@ def parse_metrics(stdout: str) -> dict:
 
 
 # Index kolom tabel pipeline-comparison.md (0-based split "|") — cocokin lagi
-# kalau header tabelnya berubah lagi.
+# kalau header tabelnya berubah lagi. "Total frame" (idx 6), "Akurasi dominan"
+# (idx 13), dan "IDF1" (idx 14) sengaja TIDAK dipetakan di sini — evaluate.py
+# tidak menghitungnya, kolom itu diisi manual terpisah dari otomasi ini.
 COL_MAP = {
-    "status": 5, "cakupan": 6, "identitas": 7, "precision": 8, "recall": 9,
-    "f1": 10, "akurasi": 11, "false_merge": 12, "false_split": 13,
-    "fps": 14, "cpu_peak": 15, "ram_peak": 16,
+    "status": 5, "cakupan": 7, "identitas": 8, "precision": 9, "recall": 10,
+    "f1": 11, "akurasi": 12, "false_merge": 15, "false_split": 16,
+    "fps": 17, "cpu_peak": 18, "ram_peak": 19,
     # Rata-rata per-frame dari latency.csv (lihat latency_logger.py) — kosong
     # buat kombinasi lama yang belum di-rerun setelah instrumentasi ini ada.
-    "decode_ms": 17, "detection_ms": 18, "tracking_ms": 19,
-    "reid_ms": 20, "matching_ms": 21, "total_ai_ms": 22,
+    "decode_ms": 20, "detection_ms": 21, "tracking_ms": 22,
+    "reid_ms": 23, "matching_ms": 24, "total_ai_ms": 25,
 }
 
 
