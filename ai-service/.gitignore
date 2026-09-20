@@ -23,11 +23,18 @@ sample_0904/
 sample_0910/
 predictions_runs/
 predictions_runs_current/
+archive/
+reports/
 
 # macOS
 .DS_Store
 # Runtime logs
 *.log
+latency.csv
+latency_stats.csv
+predictions.csv
+resources.csv
+benchmark/output.csv*
 
 # Secrets / credentials
 .cam_rtsp_backup.sql
