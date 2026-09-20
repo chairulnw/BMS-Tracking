@@ -29,32 +29,45 @@ FALLBACK_MAX_GAP = float(os.getenv("CLIP_FALLBACK_MAX_GAP", "20"))
 
 # Klip file = rekaman scene utuh (bisa 90 dtk, banyak orang). Yang mau ditonton
 # cuma sekitar momen event → potong jendela ini (detik sebelum/sesudah target).
-WINDOW_BEFORE = float(os.getenv("CLIP_WINDOW_BEFORE", "30"))
+# Juga jadi batas atas durasi tracklet yang dipakai buat wall_start (lihat di
+# bawah) — jendela lebih pendek = lebih mungkin muat di satu file rekaman.
+WINDOW_BEFORE = float(os.getenv("CLIP_WINDOW_BEFORE", "6"))
 WINDOW_AFTER  = float(os.getenv("CLIP_WINDOW_AFTER", "8"))
 
 
 import re
 
-def _find_clip(camera_id: str, target: datetime) -> tuple[Path, datetime] | None:
+_STAMP_ONLY_RE = re.compile(r"^(\d{8}_\d{6}(?:_\d+)?)$")
+
+
+def _clip_stamp(f: Path, camera_id: str) -> str | None:
+    """Cocokkan f cuma kalau stem-nya PERSIS clip_{camera_id}_{stamp} — bukan
+    prefix match. Glob "clip_c10_*" ikut nangkep "clip_c10_0910_*" (kamera
+    LAIN, c10_0910) karena "*" gak peduli batas nama kamera; di sini
+    validasi ulang: bagian setelah "clip_{camera_id}_" harus PERSIS pola
+    stempel waktu, bukan potongan camera_id kamera lain yang lebih panjang."""
+    prefix = f"clip_{camera_id}_"
+    if not f.stem.startswith(prefix):
+        return None
+    m = _STAMP_ONLY_RE.match(f.stem[len(prefix):])
+    return m.group(1) if m else None
+
+
+def _find_clip(camera_id: str, target: datetime) -> tuple[Path, datetime, float] | None:
     """Cari klip yang jendela [mulai, mulai+durasi]-nya mencakup target.
-    Jika target jatuh di gap rekaman, fallback ke klip terdekat pada hari yang sama.
-    Mendukung format nama clip_{camera_id}_*.mp4/avi dan clip_{camera_id}_0910_*."""
+    Jika target jatuh di gap rekaman, fallback ke klip terdekat pada hari yang
+    sama. Balikin juga durasi file (dur) — dipakai caller buat clamp jendela
+    potong ffmpeg biar gak nyeek lewat akhir file (lihat get_clip)."""
     candidates: list[tuple[datetime, datetime, Path]] = []
-    patterns = [f"clip_{camera_id}_*.mp4", f"clip_{camera_id}_*.avi",
-                f"clip_{camera_id}_0910_*.mp4", f"clip_{camera_id}_0910_*.avi"]
-    seen_paths = set()
-    all_files: list[Path] = []
-    for pat in patterns:
-        for p in CLIPS_DIR.glob(pat):
-            if p not in seen_paths:
-                seen_paths.add(p)
-                all_files.append(p)
+    all_files: list[Path] = [
+        p for pat in (f"clip_{camera_id}_*.mp4", f"clip_{camera_id}_*.avi")
+        for p in CLIPS_DIR.glob(pat)
+    ]
 
     for f in all_files:
-        m = re.search(r"(\d{8}_\d{6}(?:_\d+)?)", f.stem)
-        if not m:
+        stamp = _clip_stamp(f, camera_id)
+        if stamp is None:
             continue
-        stamp = m.group(1)
         ts = None
         for fmt in ("%Y%m%d_%H%M%S_%f", "%Y%m%d_%H%M%S"):
             try:
@@ -73,21 +86,22 @@ def _find_clip(camera_id: str, target: datetime) -> tuple[Path, datetime] | None
             except (ValueError, OSError):
                 pass
         end = ts + timedelta(seconds=dur)
-        candidates.append((ts, end, f))
+        candidates.append((ts, end, dur, f))
 
     if not candidates:
         return None
 
     # 1. Prioritas: klip yang mencakup target secara langsung
-    for ts, end, f in candidates:
+    for ts, end, dur, f in candidates:
         if ts <= target <= end:
-            return f, ts
+            return f, ts, dur
 
     # 2. Fallback: klip terdekat pada hari yang sama
     best_file: Path | None = None
     best_ts: datetime | None = None
+    best_dur: float = 0.0
     min_diff = float("inf")
-    for ts, end, f in candidates:
+    for ts, end, dur, f in candidates:
         if ts.date() != target.date():
             continue
         if target > end:
@@ -98,11 +112,12 @@ def _find_clip(camera_id: str, target: datetime) -> tuple[Path, datetime] | None
             min_diff = diff
             best_file = f
             best_ts = ts
+            best_dur = dur
 
     # Batas toleransi fallback (default 20 detik)
     max_gap = FALLBACK_MAX_GAP
     if best_file and best_ts and min_diff <= max_gap:
-        return best_file, best_ts
+        return best_file, best_ts, best_dur
 
     return None
 
@@ -197,10 +212,9 @@ async def get_clip(camera_id: str, request: Request, timestamp: datetime = Query
                 # 2. Ekstrak wall-clock asli rekaman jika rekaman live. Prioritas
                 # row["ended_at"] (tl.last_seen, waktu frame terakhir tracklet
                 # BENERAN terlihat) — bukan nama file thumbnail/created_at, yang
-                # keduanya distempel saat tracklet FINALISASI (bisa telat sampai
-                # TRACKLET_GAP_CYCLES=15 siklus batch, ~2 detik di FPS efektif
-                # 7.5, dari momen orang itu sebenarnya masih di frame), jadi
-                # jendela klip yang dipotong bisa geser ke momen setelahnya.
+                # keduanya distempel saat tracklet FINALISASI (bisa telat dari
+                # momen orang itu sebenarnya masih di frame), jadi jendela klip
+                # yang dipotong bisa geser ke momen setelahnya.
                 if row["ended_at"]:
                     wall_end = row["ended_at"].astimezone(ZoneInfo("Asia/Jakarta")).replace(tzinfo=None)
                 else:
@@ -218,7 +232,18 @@ async def get_clip(camera_id: str, request: Request, timestamp: datetime = Query
 
                 if wall_end:
                     if row["started_at"] and row["ended_at"]:
-                        tracklet_dur = max(1.0, (row["ended_at"] - row["started_at"]).total_seconds())
+                        # Dipotong ke CLIP_MAX_WINDOW_SEC (bukan durasi tracklet
+                        # penuh): tracklet bisa jauh lebih panjang dari satu file
+                        # rekaman (mis. gap nunggu giliran kamera lain di mode
+                        # file-playlist bikin ClipRecorder tutup-buka klip baru
+                        # berkali-kali di tengah tracklet yang sama) — jendela
+                        # penuh sering nembus habis 1 file lalu minta potongan
+                        # yang gak ada di situ. Jendela pendek di sekitar
+                        # wall_end jauh lebih mungkin muat di satu file.
+                        tracklet_dur = min(
+                            max(1.0, (row["ended_at"] - row["started_at"]).total_seconds()),
+                            WINDOW_BEFORE,
+                        )
                     else:
                         tracklet_dur = 4.0
                     wall_start = wall_end - timedelta(seconds=tracklet_dur)
@@ -236,7 +261,7 @@ async def get_clip(camera_id: str, request: Request, timestamp: datetime = Query
 
     if found is None:
         raise HTTPException(404, "Klip tidak ditemukan untuk kamera/waktu ini")
-    src, clip_start = found
+    src, clip_start, clip_dur = found
 
     # Potong persis saat orang tersebut terlihat (dengan padding 0.5s di awal, 1s di akhir)
     if wall_start and wall_end:
@@ -248,6 +273,17 @@ async def get_clip(camera_id: str, request: Request, timestamp: datetime = Query
         offset    = max(0.0, (target - clip_start).total_seconds())
         seg_start = max(0.0, offset - 0.5)
         seg_dur   = max(3.0, 5.0)
+
+    # _find_clip bisa balikin klip FALLBACK (target di luar jendela [ts, end]
+    # klip ini, cuma paling dekat) — seg_start di atas dihitung relatif ke
+    # clip_start klip ini, bisa lewat jauh dari clip_dur asli (nyeek dekat/
+    # lewat akhir file → ffmpeg keluarin klip nyaris kosong, <1 detik, isinya
+    # potongan akhir file yang gak nyambung ke momen yang diminta). Clamp ke
+    # dalam batas file: kalau jendela yang diminta gak muat, mundurin
+    # seg_start biar seg_dur (minimal 1s) tetap muat di sisa durasi.
+    if seg_start >= clip_dur:
+        seg_start = max(0.0, clip_dur - 1.0)
+    seg_dur = max(1.0, min(seg_dur, clip_dur - seg_start))
 
     dst = CACHE_DIR / f"{src.stem}__{int(seg_start*10)}-{int((seg_start + seg_dur)*10)}.mp4"
     if not dst.exists():

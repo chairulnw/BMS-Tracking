@@ -104,10 +104,21 @@ class _CamSlot:
         # klip rekaman via rec_q, buffer 90, hampir gak kehilangan apa-apa).
         # File terbatas (bukan stream tanpa akhir), jadi aman dibikin tanpa
         # batas — gak akan numpuk selamanya kayak RTSP live yang gak berhenti.
-        self.frame_q:     queue.Queue             = queue.Queue(maxsize=0 if self._playlist else 2)
+        # PLAYLIST_LIVE_SIM=1: paksa file-playlist pakai antrian kecil (kayak
+        # RTSP live) buat simulasi kondisi operasional 24/7 yang drop frame
+        # berkelanjutan — dipakai buat benchmark, default tetap unbounded.
+        _live_sim = os.getenv("PLAYLIST_LIVE_SIM", "0") == "1"
+        self.frame_q:     queue.Queue             = queue.Queue(maxsize=2 if (not self._playlist or _live_sim) else 0)
+        # Diisi LANGSUNG oleh BatchProcessor tiap siklus dengan
+        # (frame, has_person, annots) — frame yang barusan dianalisis, bareng
+        # box yang barusan dihitung buat frame itu juga, satu paket atomik.
+        # Bukan diisi thread capture (lihat riwayat bug di komentar
+        # batch_processor.py dekat pemanggilnya): capture jauh lebih cepat
+        # dari analisis, jadi kalau rec_q disuplai independen dari capture,
+        # box yang dihitung belakangan (siklus batch) gak akan pernah cocok
+        # sama frame yang lagi direkam (sudah dicoba 3 pendekatan beda,
+        # semuanya gagal untuk alasan yang sama).
         self.rec_q:       queue.Queue             = queue.Queue(maxsize=90)
-        self._rec_has_person: bool                = False
-        self._rec_annots: list                    = []
         self._rec_thread: threading.Thread | None = None
         self._cap_stop:   threading.Event         = threading.Event()
         self._cap_thread: threading.Thread | None = None
@@ -197,14 +208,16 @@ class _CamSlot:
                 self.frame_q.get_nowait()
             except queue.Empty:
                 break
-        rec_q = None if self.skip_recording else self.rec_q
         if self._playlist:
+            # rec_q di sini cuma buat sinyal _CLIP_STOP (klip sumber pindah
+            # file) — frame rekaman sendiri disuplai BatchProcessor langsung.
+            rec_q = None if self.skip_recording else self.rec_q
             ev_playlist = self._playlist_events or [(p, None, None) for p in self._playlist]
             target = _CamSlot._capture_loop_files
             args   = (ev_playlist, self.frame_q, self._cap_stop, rec_q)
         else:
             target = _CamSlot._capture_loop
-            args   = (self._cap, self.frame_q, self._cap_stop, rec_q)
+            args   = (self._cap, self.frame_q, self._cap_stop)
         self._cap_thread = threading.Thread(
             target=target, args=args, daemon=True, name=f"cap-{self.camera_id}"
         )
@@ -231,32 +244,35 @@ class _CamSlot:
             self._state["running"] = False
 
     def _recorder_loop(self, rec_q: queue.Queue, stop: threading.Event) -> None:
+        """rec_q diisi BatchProcessor dengan (frame, has_person, annots) —
+        satu paket atomik per siklus, jadi box di sini SELALU cocok sama
+        frame-nya, gak perlu dicocokkan/divalidasi lagi (lihat komentar di
+        __init__ dan pemanggil di batch_processor.py)."""
         while not stop.is_set():
             try:
-                frame = rec_q.get(timeout=0.1)
+                item = rec_q.get(timeout=0.1)
             except queue.Empty:
                 continue
-            if frame is None:
+            if item is None:
                 break
-            if frame is _CLIP_STOP:
+            if item is _CLIP_STOP:
                 if self.recorder:
                     self.recorder.force_stop()
                 continue
+            frame, has_person, annots = item
             if self.recorder:
-                self.recorder.update(
-                    frame, self._rec_has_person, time.monotonic(),
-                    list(self._rec_annots) if self._rec_annots else None,
-                )
+                self.recorder.update(frame, has_person, time.monotonic(), annots or None)
 
     @staticmethod
     def _capture_loop(
         cap: cv2.VideoCapture,
         frame_q: queue.Queue,
         stop: threading.Event,
-        rec_q: "queue.Queue | None" = None,
     ) -> None:
         """Hanya baca cap.read() dan simpan frame terbaru. RTSP tetap hidup
-        terlepas dari seberapa lambat batch inference berjalan."""
+        terlepas dari seberapa lambat batch inference berjalan. Rekaman TIDAK
+        disuplai dari sini lagi — BatchProcessor yang push ke rec_q langsung
+        (lihat _recorder_loop), biar box selalu cocok sama frame-nya."""
         while not stop.is_set():
             _t0 = time.perf_counter()
             ok, frame = cap.read()
@@ -282,16 +298,6 @@ class _CamSlot:
                 frame_q.put_nowait((frame, decode_ms, None, None))
             except queue.Full:
                 pass
-            if rec_q is not None:
-                if rec_q.full():
-                    try:
-                        rec_q.get_nowait()
-                    except queue.Empty:
-                        pass
-                try:
-                    rec_q.put_nowait(frame)
-                except queue.Full:
-                    pass
 
     @staticmethod
     def _capture_loop_files(
@@ -340,20 +346,11 @@ class _CamSlot:
                     # (frame, decode_ms, source_clip, local_frame) — source_clip/
                     # local_frame dipakai BatchProcessor buat logging prediksi;
                     # RTSP kirim bentuk sama dengan 2 field terakhir None.
+                    # Rekaman TIDAK disuplai dari sini — lihat _recorder_loop.
                     frame_q.put_nowait((frame, decode_ms, clip_name, local_frame))
                 except queue.Full:
                     pass
                 local_frame += 1
-                if rec_q is not None:
-                    if rec_q.full():
-                        try:
-                            rec_q.get_nowait()
-                        except queue.Empty:
-                            pass
-                    try:
-                        rec_q.put_nowait(frame)
-                    except queue.Full:
-                        pass
                 next_time += frame_interval
                 sleep_dur = next_time - time.monotonic()
                 if sleep_dur > 0:

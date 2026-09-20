@@ -52,11 +52,6 @@ OCCLUSION_FRAC = float(os.getenv("OCCLUSION_FRAC", "0.45"))
 # lost_stracks). Orang masih di sana, YOLO cuma kedip. Cuma nyentuh flag rekam,
 # nggak masukin box prediksi ke pipeline identitas.
 REC_COAST_FRAMES = int(os.getenv("REC_COAST_FRAMES", "20"))
-# Track yang box centroid-nya bergerak < STATIC_PX selama STATIC_WINDOW_S detik
-# dianggap DIAM (orang duduk santai / objek) → nggak nyumbang ke flag rekam.
-# Recorder cooldown kalau SEMUA track diam. Rekam lagi begitu ada yang gerak.
-STATIC_PX       = float(os.getenv("REC_STATIC_PX", "28"))
-STATIC_WINDOW_S = float(os.getenv("REC_STATIC_WINDOW_S", "4.0"))
 
 
 def _overlap_frac(a: tuple, b: tuple) -> float:
@@ -221,9 +216,6 @@ class BatchProcessor:
         self._file_slots_done:   set[str]               = set()  # slot playlist yang sudah selesai
         self._thread: threading.Thread | None = None
         self._offline_reported: set[str]      = set()  # kamera yang sudah dilaporkan offline
-        # (cam,track) → deque[(t, cx, cy)] centroid box — buat deteksi track diam
-        # (orang duduk santai) supaya nggak bikin recorder rekam nonstop.
-        self._motion_hist: "dict[tuple[str,int], deque]" = {}
         # System Health (plan2/spesifikasi.md Fase 2) — waktu predict() batch
         # terakhir, buat tahu kapan BatchProcessor mulai jadi bottleneck.
         self._batch_ms: "deque[float]" = deque(maxlen=50)
@@ -311,7 +303,6 @@ class BatchProcessor:
                     self._sweep_orphan_crossings(time.time() + CROSSING_ORPHAN_AGE)
                     self._slots[0].db.prune_banks()
                     self._slots[0].db.reset()
-                    self._motion_hist.clear()
                     for slot in self._slots:
                         slot._side_hist.clear()
                         slot._last_dir.clear()
@@ -550,38 +541,41 @@ class BatchProcessor:
                     # Clip state diupdate di sini; frame ditulis oleh _recorder_loop.
                     # recent_lost: track ByteTrack yang baru hilang < REC_COAST_FRAMES
                     # frame lalu — orang kemungkinan masih ada, YOLO cuma kedip.
+                    # Rekam selama ADA track hidup, TANPA syarat gerak (dulu ada
+                    # motion gate — dicabut: rekaman berhenti walau tracklet/
+                    # identitasnya masih dianggap hadir kalau orang cuma diam
+                    # sebentar, jadi jendela klip yang diminta clips.py bisa lebih
+                    # panjang dari klip yang beneran kerekam → thumbnail/bbox
+                    # nunjukkin momen yang gak ada di video yang diputar).
                     _tr = slot.tracker
                     recent_lost = any(
                         getattr(_tr, "frame_id", 0) - getattr(t, "end_frame", 0) <= REC_COAST_FRAMES
                         for t in getattr(_tr, "lost_stracks", ())
                     )
-                    # Motion gate: track yang box-nya nyaris nggak gerak selama
-                    # STATIC_WINDOW_S = "diam" (orang duduk santai) → nggak nyumbang
-                    # ke flag rekam. Recorder cooldown kalau semua track diam.
-                    _now_mono = time.monotonic()
-                    _mh = self._motion_hist
-                    any_moving = False
-                    for tid, _, x1, y1, x2, y2, _, _ in per_box:
-                        k = (slot.camera_id, tid)
-                        h = _mh.get(k)
-                        if h is None:
-                            h = _mh[k] = deque(maxlen=64)
-                        h.append((_now_mono, (x1 + x2) * 0.5, (y1 + y2) * 0.5))
-                        recent = [(cx, cy) for t, cx, cy in h if _now_mono - t <= STATIC_WINDOW_S]
-                        if len(recent) < 3:
-                            any_moving = True   # baru muncul → anggap gerak
-                        else:
-                            xs = [p[0] for p in recent]; ys = [p[1] for p in recent]
-                            if max(max(xs) - min(xs), max(ys) - min(ys)) > STATIC_PX:
-                                any_moving = True
-                    for k in [k for k in _mh if k[0] == slot.camera_id and k[1] not in active_tids]:
-                        del _mh[k]
-                    slot._rec_has_person = (n_raw > 0 and any_moving) or recent_lost
-                    slot._rec_annots = [
+                    rec_has_person = n_raw > 0 or recent_lost
+                    rec_annots = [
                         (x1, y1, x2, y2,
                          f"{slot.db.name_of(tid, slot.camera_id) or f'#{tid}'} {conf:.2f}")
                         for tid, conf, x1, y1, x2, y2, _, _ in per_box
                     ]
+                    # Rekaman disuplai LANGSUNG dari sini (frame yang barusan
+                    # dianalisis + box yang barusan dihitung), bukan dari thread
+                    # capture yang independen — box dijamin cocok sama framenya
+                    # karena satu paket yang sama, bukan dicocokkan belakangan
+                    # (percobaan sebelumnya berbasis exact-match/umur/toleransi
+                    # frame semuanya gagal: frame_q file-playlist TANPA BATAS,
+                    # jadi backlog batch loop vs rec_q yang independen bisa
+                    # menjauh tanpa batas sepanjang run, bukan cuma di awal).
+                    if slot.recorder is not None:   # None kalau skip_recording (evaluasi)
+                        if slot.rec_q.full():
+                            try:
+                                slot.rec_q.get_nowait()
+                            except queue.Empty:
+                                pass
+                        try:
+                            slot.rec_q.put_nowait((frame, rec_has_person, rec_annots))
+                        except queue.Full:
+                            pass
 
                     idx = frame_idx[slot.camera_id] + 1
                     frame_idx[slot.camera_id] = idx
@@ -616,6 +610,18 @@ class BatchProcessor:
                 # Crossing yang track-nya keburu hilang tanpa resolve → flush
                 # pakai label terbaik yg ada, biar occupancy count nggak meleset.
                 self._sweep_orphan_crossings(now)
+
+                # Tutup tracklet yang expired (gap waktu / durasi maks) untuk
+                # SEMUA kamera, termasuk yang lagi is_new=False siklus ini (mis.
+                # nunggu giliran kamera lain di rantai kronologis file-playlist)
+                # — close_expired() di dalam loop per-kamera di atas cuma jalan
+                # buat kamera yang dapet frame baru, jadi kamera yang lagi diam
+                # gak pernah sempat dicek sampai frame berikutnya datang.
+                _sweep_now = datetime.now(timezone.utc)
+                for slot in self._slots:
+                    closed = slot.db.close_expired(slot.camera_id, _sweep_now)
+                    if closed:
+                        self._finalize_tracklets(closed)
 
         finally:
             # Flush semua tracklet terbuka sebelum berhenti — kalau tidak,

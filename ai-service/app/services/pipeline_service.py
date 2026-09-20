@@ -65,7 +65,12 @@ def _debug_reid() -> bool:
 # dihidupkan lagi).
 # ASSOC_THRESHOLD didefinisikan di app.schemas (satu sumber, dipakai juga sebagai
 # default reid_threshold di ProcessVideoRequest/StreamStartRequest).
-TRACKLET_GAP_CYCLES    = 15       # siklus batch berturut-turut track hilang → tutup tracklet
+TRACKLET_GAP_SECONDS   = 2.0      # detik wall-clock tanpa track ini → tutup tracklet. Wall-clock,
+                                   # BUKAN hitungan siklus (dulu TRACKLET_GAP_CYCLES=15 siklus) —
+                                   # siklus cuma nambah kalau kamera ini dapet frame baru, jadi
+                                   # kamera yang lagi nganggur (mis. gantian klip lintas kamera di
+                                   # file-playlist, lihat stream_manager.py) nggak pernah dianggap
+                                   # expired walau diam berapa menit sekalipun.
 TRACKLET_MAX_DURATION  = 600.0    # detik — tutup paksa + buka tracklet baru dengan key sama
 TRACKLET_MAX_SAMPLES   = 16       # maks embedding disimpan per tracklet (top-K by quality)
 TRACKLET_MAX_POSITIONS = 120      # maks titik kaki disimpan per tracklet (garis lintasan/heatmap)
@@ -98,7 +103,6 @@ class Tracklet:
     best_x:     "int | None"              = None  # titik kaki (foot point) sampel best_conf — fallback lama
     best_y:     "int | None"              = None
     positions:  list                      = field(default_factory=list)  # [(x,y), ...] tiap observe(), urut waktu
-    missing:    int                       = 0   # siklus batch berturut-turut tanpa track ini
     folded_track_ids: list                = field(default_factory=list)  # track_id fragmen yang dilipat ke sini
     sample_crops: list                    = field(default_factory=list)  # crop per sample, hanya diisi kalau DEBUG_REID=1
 
@@ -251,23 +255,18 @@ class IdentityDB:
             _put(densest)
 
     def update_active(self, cam_id: str, track_ids: "set[int]") -> None:
-        """Dipanggil tiap siklus batch. Update tracklet mana yang masih 'hidup'
-        (missing=0) dan mana yang mulai hilang (missing += 1)."""
+        """Dipanggil tiap siklus batch yang dapet frame baru untuk kamera ini."""
         self._active_tracks[cam_id] = set(track_ids)
-        for key, tl in self._open.items():
-            if key[0] != cam_id:
-                continue
-            tl.missing = 0 if tl.track_id in track_ids else tl.missing + 1
 
     def close_expired(self, cam_id: str, now: "datetime | None" = None) -> list[dict]:
-        """Tutup tracklet kamera ini yang track-nya hilang >= TRACKLET_GAP_CYCLES
-        siklus, atau yang sudah melebihi TRACKLET_MAX_DURATION (lalu langsung
+        """Tutup tracklet kamera ini yang track-nya hilang >= TRACKLET_GAP_SECONDS
+        wall-clock, atau yang sudah melebihi TRACKLET_MAX_DURATION (lalu langsung
         buka tracklet baru dengan key sama — track-nya masih hidup)."""
         now = now or datetime.now(timezone.utc)
         closed: list[dict] = []
         for key in [k for k in list(self._open) if k[0] == cam_id]:
             tl = self._open[key]
-            gap_expired      = tl.missing >= TRACKLET_GAP_CYCLES
+            gap_expired      = (now - tl.last_seen).total_seconds() >= TRACKLET_GAP_SECONDS
             duration_expired = (now - tl.started_at).total_seconds() > TRACKLET_MAX_DURATION
             if not (gap_expired or duration_expired):
                 continue
