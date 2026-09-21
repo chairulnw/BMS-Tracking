@@ -1,4 +1,5 @@
 # BMS-IIP Kamera Pengawas
+https://drive.google.com/drive/u/0/folders/16Ufndf6Bdy-I3cwdcW0MwUQrll8WG1rr
 
 Submodul **Kamera Pengawas** dari Building Management System. Platform video
 analytics yang membaca stream RTSP dari kamera CCTV, mendeteksi dan melacak
