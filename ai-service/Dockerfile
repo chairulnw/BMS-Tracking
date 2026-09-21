@@ -8,6 +8,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY requirements.txt .
+# CPU-only torch explicitly: plain "pip install torch" on Linux still pulls
+# nvidia-cudnn/cublas/etc as required deps (several GB) even without a GPU —
+# only the dedicated cpu index skips them. Installed first so ultralytics'
+# unpinned "torch" dependency is already satisfied with the small build.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
