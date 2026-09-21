@@ -7,9 +7,6 @@ uvicorn[standard]>=0.30.0
 python-dotenv>=1.0.0
 PyJWT>=2.9.0
 psutil>=6.0.0
-# torchreid: install from source jika pip install torchreid gagal
-# pip install git+https://github.com/KaiyangZhou/deep-person-reid.git
-torchreid
 # openai/CLIP (dipakai PARExtractor.detect_color_scored() untuk warna baju)
 # sengaja di-skip di sini — build dari git lambat. par_service.py sudah
 # nangkep ImportError-nya, jalan tanpa deteksi warna kalau paket ini absen.

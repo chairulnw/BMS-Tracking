@@ -11,7 +11,6 @@ from zoneinfo import ZoneInfo
 import cv2
 import numpy as np
 import torch
-import torchreid
 from ultralytics import YOLO
 from ultralytics.trackers.byte_tracker import BYTETracker
 from ultralytics.utils import IterableSimpleNamespace, YAML
@@ -54,7 +53,7 @@ def _overlap_frac(a: tuple, b: tuple) -> float:
 class _ModelBundle:
     """Model + config sekali-load, dipakai ulang tiap restart stream via StreamManager."""
     detector:     YOLO
-    extractor:    "torchreid.utils.FeatureExtractor"
+    extractor:    "TransReIDExtractor"
     tracker_args: IterableSimpleNamespace
     tracker_cls:  type
     par:          None = None
@@ -80,12 +79,8 @@ def load_model_bundle(detector_model: str, reid_model: str) -> _ModelBundle:
           f"ReID({reid_model}) → {reid_device}")
     detector = YOLO(detector_model)
     detector.to(detector_device)
-    _msmt17 = Path.home() / ".cache/torch/checkpoints/osnet_ain_x1_0_msmt17.pt"
-    extractor = torchreid.utils.FeatureExtractor(
-        model_name=reid_model,
-        model_path=str(_msmt17) if _msmt17.exists() else "",
-        device=reid_device,
-    )
+    from app.services.stream_service.transreid_extractor import TransReIDExtractor
+    extractor = TransReIDExtractor(device=reid_device)
     tracker_cls, tracker_yaml = BYTETracker, "bytetrack.yaml"
     print("[batch] tracker: bytetrack")
     tracker_cfg  = YAML.load(check_yaml(tracker_yaml))
