@@ -1,5 +1,5 @@
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request

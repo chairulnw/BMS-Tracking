@@ -23,7 +23,6 @@ from pathlib import Path
 from ultralytics import YOLO
 
 from app.schemas import (
-    ASSOC_THRESHOLD,
     IdentityRecord,
     ProcessVideoRequest,
     ProcessVideoResponse,
