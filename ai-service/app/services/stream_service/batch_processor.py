@@ -12,7 +12,6 @@ import cv2
 import numpy as np
 import torch
 import torchreid
-from ocsort.ocsort import OCSort
 from ultralytics import RTDETR, YOLO
 from ultralytics.trackers.bot_sort import BOTSORT
 from ultralytics.trackers.byte_tracker import BYTETracker
@@ -52,29 +51,9 @@ def _overlap_frac(a: tuple, b: tuple) -> float:
     return inter / m if m > 0 else 0.0
 
 
-class _OCSortAdapter:
-    """Bungkus OCSort (interface array polos) biar dipanggil sama seperti
-    BYTETracker/BOTSORT: .update(det, frame) -> [x1,y1,x2,y2,track_id,conf]."""
-
-    def __init__(self, args=None) -> None:
-        self._oc = OCSort()
-
-    def update(self, det, frame=None) -> np.ndarray:
-        if det is None or len(det) == 0:
-            return np.empty((0, 6))
-        dets = np.concatenate(
-            [det.xyxy, det.conf.reshape(-1, 1), det.cls.reshape(-1, 1)], axis=1
-        )
-        tracks = self._oc.update(torch.as_tensor(dets), None)  # OCSort butuh Tensor, bukan ndarray
-        if len(tracks) == 0:
-            return np.empty((0, 6))
-        return tracks[:, [0, 1, 2, 3, 4, 6]]   # -> [x1,y1,x2,y2,id,conf]
-
-
-TRACKER_TYPE = os.getenv("TRACKER_TYPE", "bytetrack")   # bytetrack | botsort | ocsort
+TRACKER_TYPE = os.getenv("TRACKER_TYPE", "bytetrack")   # bytetrack | botsort
 _TRACKER_REGISTRY = {"bytetrack": (BYTETracker,      "bytetrack.yaml"),
-                     "botsort":   (BOTSORT,          "botsort.yaml"),
-                     "ocsort":    (_OCSortAdapter,   None)}
+                     "botsort":   (BOTSORT,          "botsort.yaml")}
 
 
 @dataclass
