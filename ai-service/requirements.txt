@@ -1,5 +1,13 @@
 ultralytics>=8.3.0
 lap>=0.5.12
+yacs>=0.1.8   # config system dipakai vendored TransReID/config/
+# dependency vendored PromptPAR clip/ (app/par/clip/) — pip package "clip"
+# beneran TIDAK diinstall di sini, ini cuma library pendukungnya.
+tqdm>=4.66.0
+ftfy>=6.2.0
+regex>=2024.5.15
+packaging>=24.0
+pillow>=10.4.0
 requests>=2.32.0
 opencv-python>=4.10.0
 fastapi>=0.115.0

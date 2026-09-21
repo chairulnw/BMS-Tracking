@@ -93,8 +93,8 @@ def load_model_bundle(detector_model: str, reid_model: str) -> _ModelBundle:
     par = None
     rap1_checkpoint = Path("checkpoints/par_checkpoints/RAP1.pth")
     if rap1_checkpoint.exists():
-        from app.par.par_service import PARExtractor
         try:
+            from app.par.par_service import PARExtractor
             par = PARExtractor(str(rap1_checkpoint), device=reid_device)
         except Exception as exc:
             print(f"[batch] PAR gagal dimuat, lanjut tanpa atribut: {exc}")

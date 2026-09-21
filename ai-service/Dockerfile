@@ -1,5 +1,10 @@
 FROM python:3.13-slim
 
+# unbuffered stdout: without this, print() (main.py's timestamped log lines)
+# sits in a block buffer and shows up in `docker logs` minutes late or not
+# until the process exits — stdout isn't a TTY inside a container.
+ENV PYTHONUNBUFFERED=1
+
 # ffmpeg: clip encoding. git: pip installs from GitHub in requirements.txt.
 # libgl1/libglib2.0-0: opencv-python runtime deps on slim images.
 RUN apt-get update && apt-get install -y --no-install-recommends \
