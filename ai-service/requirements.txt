@@ -7,6 +7,7 @@ uvicorn[standard]>=0.30.0
 python-dotenv>=1.0.0
 PyJWT>=2.9.0
 psutil>=6.0.0
-# openai/CLIP: dipakai PARExtractor.detect_color_scored() untuk warna baju —
-# beda dari clip/ vendored PromptPAR di app/par/, jangan pip install "clip" biasa.
-git+https://github.com/openai/CLIP.git
+# openai/CLIP (dipakai PARExtractor.detect_color_scored() untuk warna baju)
+# sengaja di-skip di sini — build dari git lambat. par_service.py sudah
+# nangkep ImportError-nya, jalan tanpa deteksi warna kalau paket ini absen.
+# Pasang lagi kalau perlu: git+https://github.com/openai/CLIP.git
