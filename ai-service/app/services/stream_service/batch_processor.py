@@ -11,9 +11,7 @@ from zoneinfo import ZoneInfo
 import cv2
 import numpy as np
 import torch
-import torchreid
-from ultralytics import RTDETR, YOLO
-from ultralytics.trackers.bot_sort import BOTSORT
+from ultralytics import YOLO
 from ultralytics.trackers.byte_tracker import BYTETracker
 from ultralytics.utils import IterableSimpleNamespace, YAML
 from ultralytics.utils.checks import check_yaml
@@ -51,16 +49,11 @@ def _overlap_frac(a: tuple, b: tuple) -> float:
     return inter / m if m > 0 else 0.0
 
 
-TRACKER_TYPE = os.getenv("TRACKER_TYPE", "bytetrack")   # bytetrack | botsort
-_TRACKER_REGISTRY = {"bytetrack": (BYTETracker,      "bytetrack.yaml"),
-                     "botsort":   (BOTSORT,          "botsort.yaml")}
-
-
 @dataclass
 class _ModelBundle:
     """Model + config sekali-load, dipakai ulang tiap restart stream via StreamManager."""
     detector:     YOLO
-    extractor:    "torchreid.utils.FeatureExtractor"
+    extractor:    "TransReIDExtractor"
     tracker_args: IterableSimpleNamespace
     tracker_cls:  type
     par:          None = None
@@ -82,39 +75,19 @@ def load_model_bundle(detector_model: str, reid_model: str) -> _ModelBundle:
     else:
         reid_device = "cpu"
 
-    # RTDETR pakai kelas ultralytics beda dari YOLO, dipilih dari nama file weight
-    detector_cls = RTDETR if "rtdetr" in detector_model.lower() else YOLO
-    print(f"[batch] loading {detector_cls.__name__}({detector_model}) → {detector_device}, "
+    print(f"[batch] loading YOLO({detector_model}) → {detector_device}, "
           f"ReID({reid_model}) → {reid_device}")
-    detector = detector_cls(detector_model)
+    detector = YOLO(detector_model)
     detector.to(detector_device)
-    _reid_checkpoints = {
-        "osnet_ain_x1_0": "osnet_ain_x1_0_msmt17.pt",
-        "resnet50":       "resnet50_market1501_converted.pth",
-    }
-    if reid_model == "transreid":
-        from app.services.stream_service.transreid_extractor import TransReIDExtractor
-        extractor = TransReIDExtractor(device=reid_device)
-    elif reid_model == "bot_resnet50":
-        from app.services.stream_service.bot_resnet50_extractor import BotResNet50Extractor
-        extractor = BotResNet50Extractor(device=reid_device)
-    else:
-        _ckpt_name = _reid_checkpoints.get(reid_model)
-        _ckpt_path = Path.home() / ".cache/torch/checkpoints" / _ckpt_name if _ckpt_name else None
-        extractor = torchreid.utils.FeatureExtractor(
-            model_name=reid_model,
-            model_path=str(_ckpt_path) if _ckpt_path and _ckpt_path.exists() else "",
-            device=reid_device,
-        )
-    tracker_cls, tracker_yaml = _TRACKER_REGISTRY[TRACKER_TYPE]
-    print(f"[batch] tracker: {TRACKER_TYPE}")
-    tracker_args = None
-    if tracker_yaml is not None:
-        tracker_cfg  = YAML.load(check_yaml(tracker_yaml))
-        # Default ByteTrack (buffer 30, match_thresh 0.8): tracker ketat +
-        # asosiasi-tracklet longgar mengungguli tracker longgar dalam eval
-        # (tracker longgar bikin track_id melayang nyebrang orang saat occlusion).
-        tracker_args = IterableSimpleNamespace(**tracker_cfg)
+    from app.services.stream_service.transreid_extractor import TransReIDExtractor
+    extractor = TransReIDExtractor(device=reid_device)
+    tracker_cls, tracker_yaml = BYTETracker, "bytetrack.yaml"
+    print("[batch] tracker: bytetrack")
+    tracker_cfg  = YAML.load(check_yaml(tracker_yaml))
+    # Default ByteTrack (buffer 30, match_thresh 0.8): tracker ketat +
+    # asosiasi-tracklet longgar mengungguli tracker longgar dalam eval
+    # (tracker longgar bikin track_id melayang nyebrang orang saat occlusion).
+    tracker_args = IterableSimpleNamespace(**tracker_cfg)
 
     # PAR jalan sekali per tracklet di crop terbaik, bukan per frame (~2s/crop di CPU)
     par = None

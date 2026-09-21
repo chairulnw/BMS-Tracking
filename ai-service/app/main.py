@@ -2,10 +2,8 @@ import builtins
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime
-from pathlib import Path
 
 import torch
-import torchreid
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,7 +30,7 @@ from app.services.stream_service import StreamManager
 # .env cukup nama file (mis. "yolo26n.pt") — folder checkpoints/ digabung di
 # sini, satu tempat, biar gak perlu ditulis ulang tiap kombinasi/dokumentasi.
 DETECTOR_MODEL = f"checkpoints/{os.getenv('DETECTOR_MODEL', 'yolo26n.pt')}"
-REID_MODEL = os.getenv("REID_MODEL", "transreid")
+REID_MODEL = "transreid"   # satu-satunya ReID yang didukung — lihat batch_processor.py
 
 
 @asynccontextmanager
@@ -52,19 +50,8 @@ async def lifespan(app: FastAPI):
     app.state.detector = YOLO(DETECTOR_MODEL)
 
     print(f"[startup] loading ReID ({REID_MODEL})…")
-    if REID_MODEL == "transreid":
-        from app.services.stream_service.transreid_extractor import TransReIDExtractor
-        app.state.extractor = TransReIDExtractor(device=device)
-    elif REID_MODEL == "bot_resnet50":
-        from app.services.stream_service.bot_resnet50_extractor import BotResNet50Extractor
-        app.state.extractor = BotResNet50Extractor(device=device)
-    else:
-        _msmt17 = Path.home() / ".cache/torch/checkpoints/osnet_ain_x1_0_msmt17.pt"
-        app.state.extractor = torchreid.utils.FeatureExtractor(
-            model_name=REID_MODEL,
-            model_path=str(_msmt17) if _msmt17.exists() else "",
-            device=device,
-        )
+    from app.services.stream_service.transreid_extractor import TransReIDExtractor
+    app.state.extractor = TransReIDExtractor(device=device)
 
     app.state.stream_manager = StreamManager()
     print("[startup] models ready\n")
