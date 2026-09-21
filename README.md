@@ -121,7 +121,6 @@ ai-service/     FastAPI — inferensi YOLO/ReID/PAR per kamera, rekam klip,
       pipeline_service.py   IdentityDB (ReID) + logika file-playback
       geometry.py       util garis/polygon buat deteksi crossing
     par/                model vendored PromptPAR (person attribute recognition)
-  benchmark/            skrip & laporan perbandingan detector/tracker/Re-ID
   checkpoints/          bobot model (tidak masuk git — lihat Setup)
 
 backend/        FastAPI — sumber kebenaran data (PostgreSQL)
