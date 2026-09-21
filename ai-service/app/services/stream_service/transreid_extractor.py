@@ -16,6 +16,7 @@ nambah bias posisi kecil, bukan penentu utama; upgrade ke index per-kamera
 kalau perlu akurasi lebih presisi).
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -24,7 +25,11 @@ import torch
 import torch.nn.functional as F
 
 _AI_SERVICE_DIR = Path(__file__).resolve().parents[3]
-_REPO_DIR    = _AI_SERVICE_DIR / "checkpoints" / "TransReID"   # vendored kode arsitektur (config/model/loss)
+# TRANSREID_REPO_DIR override: di Docker, kode ini di-COPY ke image di build
+# time ke path di luar checkpoints/ (lihat Dockerfile) — checkpoints/ sendiri
+# di-bind-mount runtime, dan folder TransReID/ (isinya banyak file kecil +
+# .git) kerap gagal ke-mount utuh dari drive Windows non-C:.
+_REPO_DIR    = Path(os.getenv("TRANSREID_REPO_DIR", str(_AI_SERVICE_DIR / "checkpoints" / "TransReID")))
 _CONFIG_PATH = _REPO_DIR / "configs" / "Market" / "vit_transreid_stride.yml"
 _CKPT_PATH   = _AI_SERVICE_DIR / "checkpoints" / "vit_transreid_market1501.pth"   # bobot, sejajar checkpoint Re-ID lain
 _IMG_SIZE    = (256, 128)   # (H, W) — samain dengan INPUT.SIZE_TEST config
