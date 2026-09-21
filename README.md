@@ -32,7 +32,7 @@ memanggil endpoint backend yang terproteksi.
 
 | Layanan | Path | Tech |
 |---|---|---|
-| AI service | `ai-service/` | Python 3.14, FastAPI, Ultralytics YOLO, torchreid |
+| AI service | `ai-service/` | Python 3.14, FastAPI, Ultralytics YOLO (ByteTrack), TransReID |
 | Backend | `backend/` | Python 3.14, FastAPI, asyncpg, PostgreSQL + pgvector |
 | Frontend | `sistem-kamera-pengawas/` | Angular 20 (standalone components) |
 
@@ -109,6 +109,64 @@ cd sistem-kamera-pengawas && ng serve
 - Dashboard: http://localhost:4200
 - Swagger backend: http://localhost:8002/docs
 - Swagger AI service: http://localhost:8001/docs
+
+## Menjalankan dengan Docker
+
+Alternatif ke setup manual di atas — cocok buat deploy di komputer lain
+(termasuk Windows) tanpa install Python/Node/Postgres satu-satu. Butuh
+[Docker Desktop](https://docs.docker.com/desktop/) (di Windows: WSL2 engine
+aktif). GPU NVIDIA opsional — `docker-compose.yml` sudah minta GPU untuk
+`ai-service`; kalau komputernya tidak punya GPU, hapus blok `deploy:` di
+service itu.
+
+### 1. Siapkan `.env` (tidak ikut git — sama seperti setup manual)
+
+```bash
+cp backend/.env.example backend/.env
+cp ai-service/.env.example ai-service/.env
+```
+
+Isi `SECRET_KEY` di kedua file — **harus identik**. `DATABASE_URL`/`BACKEND_URL`/
+`AI_SERVICE_URL` biarkan default, sudah di-override otomatis lewat
+`docker-compose.yml` (container saling terhubung lewat nama service, bukan
+`localhost`).
+
+### 2. Siapkan checkpoint model
+
+`ai-service/checkpoints/` tidak ikut git — copy manual ke lokasi yang sama:
+- detector sesuai `DETECTOR_MODEL` (mis. `yolo26s.pt`)
+- `vit_transreid_market1501.pth` + folder `TransReID/` lengkap (kode arsitektur
+  vendored yang dipakai `transreid_extractor.py` — bukan cuma file bobotnya)
+- opsional: `par_checkpoints/RAP1.pth` untuk PAR
+
+### 3. Build & jalankan
+
+```bash
+docker compose up --build
+```
+
+Build pertama lama (bisa 20-30 menit) — narik base image + `torch` CUDA
+(beberapa GB). Build berikutnya jauh lebih cepat karena Docker cache layer
+yang tidak berubah.
+
+### 4. Buat akun login pertama
+
+```bash
+docker compose exec backend python scripts/create_admin.py
+```
+
+### 5. Tambah kamera
+
+Login ke `http://localhost:4200`, tambah minimal satu kamera aktif di
+halaman `/camera` — `ai-service` menolak start stream kalau tabel `cameras`
+kosong.
+
+**Troubleshooting mount di Windows**: kalau container gagal baca file yang
+sebenarnya ada di host (`schema.sql` kebaca sebagai folder kosong, atau
+`TransReID/config` hilang), itu bug bind-mount Docker Desktop dari drive
+non-`C:` (network/mapped drive) — pindahkan folder project ke drive `C:`
+lokal, atau hapus `ai-service/checkpoints/TransReID/.git` (folder `.git`
+yang besar/rumit sering jadi biang mount gagal).
 
 ## Struktur repo
 
