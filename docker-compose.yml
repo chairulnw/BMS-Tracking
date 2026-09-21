@@ -1,0 +1,60 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: bms
+      POSTGRES_PASSWORD: bms
+      POSTGRES_DB: bms_tracking
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./backend/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bms -d bms_tracking"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    env_file: ./backend/.env
+    environment:
+      DATABASE_URL: postgresql://bms:bms@db/bms_tracking
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8002:8002"
+
+  ai-service:
+    build: ./ai-service
+    env_file: ./ai-service/.env
+    environment:
+      BACKEND_URL: http://backend:8002
+    volumes:
+      - ./ai-service/checkpoints:/app/checkpoints
+      - ./ai-service/output:/app/output
+      - ./ai-service/thumbnails:/app/thumbnails
+    depends_on:
+      - backend
+    ports:
+      - "8001:8001"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  frontend:
+    build: ./sistem-kamera-pengawas
+    depends_on:
+      - backend
+      - ai-service
+    ports:
+      - "4200:80"
+
+volumes:
+  db_data:
