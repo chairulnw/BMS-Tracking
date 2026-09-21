@@ -8,10 +8,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY requirements.txt .
-# CUDA-enabled torch first: plain "pip install torch" from PyPI is CPU-only —
-# GPU builds live on PyTorch's own index. Installed before requirements.txt so
-# ultralytics's unpinned "torch" dependency is already satisfied.
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu124
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
