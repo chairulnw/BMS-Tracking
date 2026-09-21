@@ -8,11 +8,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY requirements.txt .
-# CPU-only torch explicitly: plain "pip install torch" on Linux still pulls
-# nvidia-cudnn/cublas/etc as required deps (several GB) even without a GPU —
-# only the dedicated cpu index skips them. Installed first so ultralytics'
-# unpinned "torch" dependency is already satisfied with the small build.
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+# CPU-only torch+torchvision explicitly, both from the same index: plain
+# "pip install torch" on Linux still pulls nvidia-cudnn/cublas/etc as required
+# deps (several GB) even without a GPU — only the dedicated cpu index skips
+# them. torchvision must come from here too, or pip resolves it separately
+# from default PyPI and the two builds mismatch ("operator torchvision::nms
+# does not exist"). Installed first so ultralytics' unpinned deps are already
+# satisfied with the small, matched build.
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
 # scipy first: torchreid's setup.py imports it implicitly.
 RUN pip install --no-cache-dir scipy && pip install --no-cache-dir -r requirements.txt
 COPY . .
