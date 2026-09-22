@@ -21,6 +21,17 @@ services:
     environment:
       DATABASE_URL: postgresql://bms:bms@db/bms_tracking
       AI_SERVICE_URL: http://ai-service:8001
+      # thumbnails.py/clips.py default to a path relative to this repo
+      # checkout on disk (../ai-service/thumbnails etc) — doesn't exist in a
+      # container, since backend and ai-service each only see their own
+      # build context. Point them at the same host folders ai-service writes
+      # into, mounted below.
+      THUMBNAILS_DIR: /shared/thumbnails
+      CLIPS_DIR: /shared/output/clips
+      CLIPS_WEB_DIR: /shared/output/clips_web
+    volumes:
+      - ./ai-service/thumbnails:/shared/thumbnails
+      - ./ai-service/output:/shared/output
     depends_on:
       db:
         condition: service_healthy
