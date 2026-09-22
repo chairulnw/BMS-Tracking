@@ -13,14 +13,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY requirements.txt .
-# CPU-only torch+torchvision explicitly, both from the same index: plain
-# "pip install torch" on Linux still pulls nvidia-cudnn/cublas/etc as required
-# deps (several GB) even without a GPU — only the dedicated cpu index skips
-# them. torchvision must come from here too, or pip resolves it separately
-# from default PyPI and the two builds mismatch ("operator torchvision::nms
-# does not exist"). Installed first so ultralytics' unpinned deps are already
-# satisfied with the small, matched build.
-RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# CUDA-enabled torch+torchvision explicitly, both from the same index: plain
+# "pip install torch" resolves torchvision separately from default PyPI,
+# and the two builds can mismatch ("operator torchvision::nms does not
+# exist") unless both come from here. Installed first so ultralytics'
+# unpinned deps are already satisfied with the matched build.
+#
+# ponytail: switch to https://download.pytorch.org/whl/cpu instead if
+# deploying to a machine with no NVIDIA GPU — TransReID (ViT-B) on CPU is
+# heavy enough to make the whole service unresponsive under real load
+# (observed: 502s / connection-refused from backend while ai-service was
+# "Up" but pegged doing CPU inference).
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu124
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
