@@ -50,21 +50,25 @@ services:
       # nginx's /api/ location (sistem-kamera-pengawas/nginx.conf) proxies it
       # to backend from there.
       PUBLIC_BACKEND_URL: /api
+    # checkpoints/ is baked into the image at build time (see
+    # ai-service/Dockerfile), not bind-mounted — reading large .pth/.pt files
+    # through a runtime bind mount proved unreliable on some Windows drives
+    # (silently missing/empty despite existing on the host). output/ and
+    # thumbnails/ are genuinely runtime-written, so those stay mounted.
     volumes:
-      - ./ai-service/checkpoints:/app/checkpoints
       - ./ai-service/output:/app/output
       - ./ai-service/thumbnails:/app/thumbnails
     depends_on:
       - backend
     ports:
       - "8001:8001"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
 
   frontend:
     build: ./sistem-kamera-pengawas

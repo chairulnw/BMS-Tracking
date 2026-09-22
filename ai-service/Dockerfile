@@ -22,11 +22,6 @@ COPY requirements.txt .
 # satisfied with the small, matched build.
 RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
-# Baked in at /opt (outside /app/checkpoints) so the runtime bind-mount of
-# ./ai-service/checkpoints doesn't shadow it — that mount is what silently
-# turns this folder into an empty directory on some Windows drives.
-COPY checkpoints/TransReID /opt/transreid
-ENV TRANSREID_REPO_DIR=/opt/transreid
 COPY . .
 
 EXPOSE 8001

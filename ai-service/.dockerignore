@@ -1,6 +1,3 @@
-checkpoints/*.pt
-checkpoints/*.pth
-checkpoints/par_checkpoints
 checkpoints/TransReID/.git
 output/
 thumbnails/
