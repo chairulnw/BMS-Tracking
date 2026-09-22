@@ -60,13 +60,21 @@ async def _do_restart() -> None:
         _restart_lock = asyncio.Lock()
     async with _restart_lock:
         headers = {"Authorization": f"Bearer {create_access_token('backend-service')}"}
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                await client.post(f"{_AI_URL()}/stream/stop", headers=headers)
-                r = await client.post(f"{_AI_URL()}/stream/start", json={}, headers=headers)
-                r.raise_for_status()
-        except Exception as exc:
-            print(f"[cameras] gagal restart AI stream: {exc}")
+        # ponytail: sama seperti get_snapshot — connection ke ai-service
+        # diamati intermiten, retry sekali lebih murah daripada ngejar root
+        # cause jaringan Docker yang belum pasti.
+        for attempt in range(2):
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    await client.post(f"{_AI_URL()}/stream/stop", headers=headers)
+                    r = await client.post(f"{_AI_URL()}/stream/start", json={}, headers=headers)
+                    r.raise_for_status()
+                return
+            except Exception as exc:
+                if attempt == 0:
+                    await asyncio.sleep(0.5)
+                    continue
+                print(f"[cameras] gagal restart AI stream: {exc}")
 
 
 def _extract_cam_id(rtsp_url: str) -> str | None:
@@ -270,14 +278,23 @@ async def get_snapshot(camera_id: str, request: Request) -> Response:
     if row:
         params["rtsp_url"] = row["rtsp_url"]
     headers = {"Authorization": f"Bearer {create_access_token('backend-service')}"}
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.get(f"{_AI_URL()}/snapshot/{camera_id}", params=params, headers=headers)
-        if r.status_code == 404:
-            raise HTTPException(404, "Kamera tidak ditemukan atau stream belum berjalan")
-        r.raise_for_status()
-        return Response(content=r.content, media_type="image/jpeg")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(502, f"AI service tidak dapat dijangkau: {exc}")
+    # ponytail: retry sekali kalau koneksi ke ai-service gagal — diamati
+    # intermiten (bukan permanen: request identik detik berikutnya sering
+    # berhasil), jadi ini lebih murah daripada ngejar root cause jaringan
+    # Docker yang belum pasti (bisa Docker Desktop-nya sendiri, timing, dll).
+    last_exc: Exception | None = None
+    for attempt in range(2):
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get(f"{_AI_URL()}/snapshot/{camera_id}", params=params, headers=headers)
+            if r.status_code == 404:
+                raise HTTPException(404, "Kamera tidak ditemukan atau stream belum berjalan")
+            r.raise_for_status()
+            return Response(content=r.content, media_type="image/jpeg")
+        except HTTPException:
+            raise
+        except Exception as exc:
+            last_exc = exc
+            if attempt == 0:
+                await asyncio.sleep(0.5)
+    raise HTTPException(502, f"AI service tidak dapat dijangkau: {last_exc}")
