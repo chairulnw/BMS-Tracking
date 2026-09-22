@@ -58,13 +58,13 @@ services:
       - backend
     ports:
       - "8001:8001"
-    # deploy:                    # <-- TEMPORARY local-only comment-out for
-    #   resources:                #     testing on a Mac with no NVIDIA GPU.
-    #     reservations:            #     DO NOT commit this — Windows needs it.
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   frontend:
     build: ./sistem-kamera-pengawas
