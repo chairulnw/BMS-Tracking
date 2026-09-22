@@ -21,6 +21,12 @@ _AI_URL = lambda: os.getenv("AI_SERVICE_URL", "http://localhost:8001")
 
 _RESTART_DEBOUNCE = 1.5  # detik — beberapa edit kamera beruntun cuma restart sekali
 _restart_task: "asyncio.Task | None" = None
+# Serialize the actual stop+start HTTP calls — _restart_task itself only ever
+# gets cancelled during its sleep (see _debounced_restart), never mid-flight,
+# but two debounce windows settling back-to-back could still fire overlapping
+# stop()/start() calls that race on ai-service's StreamManager and leave it
+# either 409ing or, worse, stopped-with-nothing-restarted.
+_restart_lock: "asyncio.Lock | None" = None
 
 
 async def _restart_ai_stream() -> None:
@@ -41,14 +47,26 @@ async def _debounced_restart() -> None:
         await asyncio.sleep(_RESTART_DEBOUNCE)
     except asyncio.CancelledError:
         return  # ada edit lain masuk, restart ini dibatalkan & digantikan yang baru
-    headers = {"Authorization": f"Bearer {create_access_token('backend-service')}"}
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(f"{_AI_URL()}/stream/stop", headers=headers)
-            r = await client.post(f"{_AI_URL()}/stream/start", json={}, headers=headers)
-            r.raise_for_status()
-    except Exception as exc:
-        print(f"[cameras] gagal restart AI stream: {exc}")
+    # Fire-and-forget dari sini — task ini (yang bisa di-cancel lagi oleh edit
+    # berikutnya) selesai tugasnya begitu sleep kelar. _do_restart jalan
+    # sebagai task terpisah yang tidak pernah di-cancel, jadi stop()/start()
+    # yang sudah mulai jalan tidak keputus di tengah oleh edit berikutnya.
+    asyncio.ensure_future(_do_restart())
+
+
+async def _do_restart() -> None:
+    global _restart_lock
+    if _restart_lock is None:
+        _restart_lock = asyncio.Lock()
+    async with _restart_lock:
+        headers = {"Authorization": f"Bearer {create_access_token('backend-service')}"}
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                await client.post(f"{_AI_URL()}/stream/stop", headers=headers)
+                r = await client.post(f"{_AI_URL()}/stream/start", json={}, headers=headers)
+                r.raise_for_status()
+        except Exception as exc:
+            print(f"[cameras] gagal restart AI stream: {exc}")
 
 
 def _extract_cam_id(rtsp_url: str) -> str | None:
