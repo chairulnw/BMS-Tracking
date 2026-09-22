@@ -643,7 +643,12 @@ class BatchProcessor:
             ts       = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             filename = f"{camera_id}_{ts}.jpg"
             cv2.imwrite(str(events_dir / filename), frame[y1c:y2c, x1c:x2c])
-            backend_url = os.getenv("BACKEND_URL", "http://localhost:8002")
+            # BACKEND_URL is ai-service's own internal address for calling
+            # backend (e.g. http://backend:8002 inside Docker) — not
+            # necessarily reachable from a browser. PUBLIC_BACKEND_URL, when
+            # set, overrides just the URL embedded here for the browser to
+            # fetch (e.g. "/api" behind the frontend's nginx proxy).
+            backend_url = os.getenv("PUBLIC_BACKEND_URL") or os.getenv("BACKEND_URL", "http://localhost:8002")
             return f"{backend_url}/thumbnails/events/{filename}"
         except Exception as exc:
             print(f"[{camera_id}] event snapshot error: {exc}")
@@ -660,7 +665,12 @@ class BatchProcessor:
             ts       = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             filename = f"{camera_id}_t{track_id}_{ts}.jpg"
             cv2.imwrite(str(THUMBNAILS_DIR / filename), crop)
-            backend_url = os.getenv("BACKEND_URL", "http://localhost:8002")
+            # BACKEND_URL is ai-service's own internal address for calling
+            # backend (e.g. http://backend:8002 inside Docker) — not
+            # necessarily reachable from a browser. PUBLIC_BACKEND_URL, when
+            # set, overrides just the URL embedded here for the browser to
+            # fetch (e.g. "/api" behind the frontend's nginx proxy).
+            backend_url = os.getenv("PUBLIC_BACKEND_URL") or os.getenv("BACKEND_URL", "http://localhost:8002")
             return f"{backend_url}/thumbnails/{filename}"
         except Exception as exc:
             print(f"[{camera_id}] snapshot error: {exc}")

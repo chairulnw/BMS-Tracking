@@ -43,6 +43,13 @@ services:
     env_file: ./ai-service/.env
     environment:
       BACKEND_URL: http://backend:8002
+      # Thumbnail/event-snapshot URLs are embedded in API responses and
+      # fetched directly by the browser — "backend" (BACKEND_URL's host)
+      # only resolves inside the Docker network. This relative path resolves
+      # against whatever origin the browser has the frontend open on, and
+      # nginx's /api/ location (sistem-kamera-pengawas/nginx.conf) proxies it
+      # to backend from there.
+      PUBLIC_BACKEND_URL: /api
     volumes:
       - ./ai-service/checkpoints:/app/checkpoints
       - ./ai-service/output:/app/output
@@ -51,13 +58,13 @@ services:
       - backend
     ports:
       - "8001:8001"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # deploy:                    # <-- TEMPORARY local-only comment-out for
+    #   resources:                #     testing on a Mac with no NVIDIA GPU.
+    #     reservations:            #     DO NOT commit this — Windows needs it.
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
 
   frontend:
     build: ./sistem-kamera-pengawas
