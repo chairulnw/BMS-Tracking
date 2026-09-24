@@ -21,11 +21,6 @@ services:
     environment:
       DATABASE_URL: postgresql://bms:bms@db/bms_tracking
       AI_SERVICE_URL: http://ai-service:8001
-      # thumbnails.py/clips.py default to a path relative to this repo
-      # checkout on disk (../ai-service/thumbnails etc) — doesn't exist in a
-      # container, since backend and ai-service each only see their own
-      # build context. Point them at the same host folders ai-service writes
-      # into, mounted below.
       THUMBNAILS_DIR: /shared/thumbnails
       CLIPS_DIR: /shared/output/clips
       CLIPS_WEB_DIR: /shared/output/clips_web
@@ -43,18 +38,7 @@ services:
     env_file: ./ai-service/.env
     environment:
       BACKEND_URL: http://backend:8002
-      # Thumbnail/event-snapshot URLs are embedded in API responses and
-      # fetched directly by the browser — "backend" (BACKEND_URL's host)
-      # only resolves inside the Docker network. This relative path resolves
-      # against whatever origin the browser has the frontend open on, and
-      # nginx's /api/ location (sistem-kamera-pengawas/nginx.conf) proxies it
-      # to backend from there.
       PUBLIC_BACKEND_URL: /api
-    # checkpoints/ is baked into the image at build time (see
-    # ai-service/Dockerfile), not bind-mounted — reading large .pth/.pt files
-    # through a runtime bind mount proved unreliable on some Windows drives
-    # (silently missing/empty despite existing on the host). output/ and
-    # thumbnails/ are genuinely runtime-written, so those stay mounted.
     volumes:
       - ./ai-service/output:/app/output
       - ./ai-service/thumbnails:/app/thumbnails
@@ -62,7 +46,7 @@ services:
       - backend
     ports:
       - "8001:8001"
-    deploy:
+    deploy: #Hapus jika tidak memiliki GPU Nvidia
       resources:
         reservations:
           devices:

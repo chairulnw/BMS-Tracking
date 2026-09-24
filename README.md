@@ -36,8 +36,9 @@ Download dari [Google Drive](https://drive.google.com/drive/folders/1haDcq2ecycD
 
 ## Cara 1. Menjalankan dengan Docker
 
-Butuh [Docker Desktop](https://docs.docker.com/desktop/). GPU NVIDIA
-opsional — kalau tidak ada, hapus blok `deploy:` pada service `ai-service`
+Butuh [Docker Desktop](https://docs.docker.com/desktop/). 
+
+Jika tidak ada GPU NVIDIA, hapus blok `deploy:` pada service `ai-service`
 di `docker-compose.yml`.
 
 ```bash
