@@ -1,4 +1,4 @@
-"""Fase 1 plan2/spesifikasi.md: hapus clip/thumbnail lama + guard kapasitas.
+"""Hapus clip/thumbnail lama + guard kapasitas.
 Dijalankan sebagai background thread dari lifespan (app/main.py)."""
 
 import os
@@ -11,13 +11,10 @@ CLIPS_WEB_DIR  = Path("output/clips_web")  # cache MP4 transcode-on-request (dit
 THUMBNAILS_DIR = Path("thumbnails")  # termasuk thumbnails/events/ (rglob)
 
 RETENTION_DAYS         = float(os.getenv("RETENTION_DAYS", "30"))
-# ponytail: cap ukuran folder project sendiri (GB), BUKAN persentase disk
-# seluruh sistem — disk Mac/server bisa 90%+ penuh gara-gara hal lain sama
-# sekali (OS, app lain) yang gak ada hubungannya sama clip/thumbnail di sini.
-# Guard berbasis persen-disk-seluruh-sistem pernah kejadian nyata: disk 93%
-# (padahal project cuma raih beberapa ratus MB), guard nyoba turunin ke 90%
-# dan gak akan PERNAH berhasil cuma dari folder ini — jadi dia hapus TERUS,
-# termasuk file yang baru dibuat beberapa menit lalu.
+# Cap ukuran folder project sendiri (GB), BUKAN persentase disk sistem —
+# guard berbasis persen-disk-seluruh-sistem pernah kejadian nyata: disk penuh
+# gara-gara hal lain, guard nyoba turunin persentase dan gak akan PERNAH
+# berhasil cuma dari folder ini, jadi hapus TERUS termasuk file yang baru dibuat.
 MAX_STORAGE_GB         = float(os.getenv("MAX_STORAGE_GB", "5"))
 CLEANUP_INTERVAL_HOURS = float(os.getenv("CLEANUP_INTERVAL_HOURS", "6"))
 
@@ -86,7 +83,7 @@ def start_background(stop_event: threading.Event) -> threading.Thread:
 
 
 def _demo() -> None:
-    """ponytail self-check: file tua & cap-kapasitas beneran kehapus, file baru dalam batas selamat."""
+    """Self-check: file tua & cap-kapasitas beneran kehapus, file baru dalam batas selamat."""
     import tempfile
 
     with tempfile.TemporaryDirectory() as tmp:

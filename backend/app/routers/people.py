@@ -111,14 +111,14 @@ async def people_feed(
     lower_color: str | None  = Query(None, description="Warna bawahan, boleh multi dipisah koma (OR)"),
     gender:      str | None  = Query(None, description="'male' atau 'female', dari skor atribut PAR 'female'"),
     attrs:       list[str] | None = Query(None, description="Grup atribut PAR generik (mis. aksesoris: tas/topi/kacamata). Tiap value dipisah koma untuk OR di dalam grup; beberapa `attrs=` di-AND satu sama lain"),
-    similar_to:  int | None  = Query(None, description="tracklet_id acuan — urutkan berdasar kemiripan penampilan (Fase 3, KNN pgvector)"),
+    similar_to:  int | None  = Query(None, description="tracklet_id acuan — urutkan berdasar kemiripan penampilan (KNN pgvector)"),
     page:        int         = Query(1, ge=1),
     limit:       int         = Query(12, ge=1, le=100),
 ) -> PeopleFeedResponse:
     """Feed deteksi untuk halaman People. Tanpa filter = recent detections.
     `q`/`person_id` mempersempit ke satu orang. Filter atribut
     (upper_color/lower_color/gender/attrs) butuh tracklets.attrs terisi
-    (Fase 3, PAR) — deteksi yang belum punya tracklet tertaut otomatis tidak
+    (hasil PAR) — deteksi yang belum punya tracklet tertaut otomatis tidak
     lolos filter atribut apa pun (LEFT JOIN, attrs NULL). `attrs` generik
     untuk grup PAR lain (aksesoris dll) — OR di dalam satu `attrs=`, AND
     antar `attrs=` berbeda. `similar_to` mengubah urutan hasil dari

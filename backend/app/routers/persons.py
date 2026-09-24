@@ -271,7 +271,7 @@ async def get_crossings(
 
 @router.get("/{person_id}/trajectory", response_model=list[TrajectoryPoint])
 async def get_trajectory(person_id: int, request: Request) -> list[TrajectoryPoint]:
-    """Urutan kamera yang dilewati orang ini, dari tracklets (T4.2). Lintas
+    """Urutan kamera yang dilewati orang ini, dari tracklets. Lintas
     hari sekaligus — sama seperti Timeline, tidak dibatasi tanggal."""
     pool = request.app.state.pool
     exists = await pool.fetchval("SELECT id FROM persons WHERE id = $1", person_id)
@@ -305,18 +305,10 @@ async def get_trajectory(person_id: int, request: Request) -> list[TrajectoryPoi
 
 @router.get("/{person_id}/camera-points", response_model=list[CameraPoint])
 async def get_camera_points(person_id: int, request: Request) -> list[CameraPoint]:
-    """Titik-titik posisi orang ini per kamera, di ruang koordinat piksel asli
-    kamera itu — dipakai tab Pergerakan (garis lintasan + heatmap), TIDAK
-    butuh zona. Gabungan tiga sumber:
-    - titik lintas (crossing) dari occupancy_events — butuh zona line/polygon,
-      direction='IN'/'OUT', jarang ada
-    - SELURUH titik kaki tiap tracklet dari tracklets.positions (JSONB array,
-      urut waktu) — direction='TRACK'. Inilah yang bikin satu tracklet punya
-      BANYAK titik (bisa disambung jadi garis), bukan cuma satu ringkasan.
-      Timestamp per titik disintesis dari started_at + urutan (bukan waktu
-      asli per-frame, yang tidak disimpan) — cukup buat urutan relatif.
-    - fallback tracklets.pos_x/pos_y (satu titik) untuk baris lama yang
-      direkam sebelum kolom `positions` ada."""
+    """Titik-titik posisi orang ini per kamera (koordinat piksel asli) untuk
+    tab Pergerakan. Gabungan: crossing IN/OUT (jarang), seluruh titik kaki
+    tracklet dari tracklets.positions (direction='TRACK', jadi garis lintasan),
+    dan fallback pos_x/pos_y satu titik untuk baris lama tanpa `positions`."""
     pool = request.app.state.pool
     exists = await pool.fetchval("SELECT id FROM persons WHERE id = $1", person_id)
     if not exists:
@@ -375,18 +367,14 @@ async def get_camera_points(person_id: int, request: Request) -> list[CameraPoin
 
 @router.get("/{person_id}/dwell", response_model=list[DwellRecord])
 async def get_dwell(person_id: int, request: Request) -> list[DwellRecord]:
-    """Total waktu tinggal, dua sumber digabung (T4.3), lintas hari sekaligus:
+    """Total waktu tinggal, dua sumber digabung, lintas hari sekaligus:
 
-    - **per kamera** (`kind='camera'`) — langsung dari tracklets.started_at/
-      ended_at, SELALU ADA, TIDAK butuh zona sama sekali. Ini yang bikin tab
-      Durasi tetap kerja walau belum ada zona digambar (atau zona-nya nempel
-      di kamera yang salah).
-    - **per zona, line-crossing SAJA** (`kind='zone'`) — dipasangkan IN→OUT
-      per zone_camera_id (per pintu fisik — satu ruangan bisa punya banyak
-      pintu, jangan dipasangkan lintas pintu). Polygon SENGAJA tidak dihitung
-      di sini — zona polygon (biasanya lorong) tumpang tindih 1:1 dengan
-      pandangan kameranya, jadi durasinya sama saja dengan durasi kamera di
-      atas; menghitungnya lagi di sini cuma duplikat."""
+    - **per kamera** (`kind='camera'`) — dari tracklets.started_at/ended_at,
+      tidak butuh zona sama sekali.
+    - **per zona, line-crossing saja** (`kind='zone'`) — dipasangkan IN→OUT
+      per zone_camera_id (per pintu fisik, jangan dipasangkan lintas pintu).
+      Polygon sengaja tidak dihitung di sini — overlap 1:1 dengan kameranya,
+      jadi durasinya sama dengan durasi kamera di atas dan cuma duplikat."""
     pool = request.app.state.pool
     exists = await pool.fetchval("SELECT id FROM persons WHERE id = $1", person_id)
     if not exists:
@@ -462,8 +450,8 @@ async def update_person(
 
     # Operator memberi nama yang sama persis dengan orang lain yang sudah
     # dikenal — ini keputusan sadar operator (bukan tebakan algoritma ReID),
-    # jadi digabung. Beda dengan ADR-002 (tidak ada merge OTOMATIS berbasis
-    # skor kemiripan): ini merge eksplisit, dipicu tindakan manusia.
+    # jadi digabung. Sistem sendiri tidak pernah merge otomatis berbasis skor
+    # kemiripan; ini merge eksplisit, dipicu tindakan manusia.
     if new_name is not None and new_name != existing["name"]:
         dup = await pool.fetchrow(
             "SELECT * FROM persons WHERE name = $1 AND is_known = TRUE AND id != $2",
@@ -555,9 +543,9 @@ async def name_suggestions(
     limit:     int = Query(5, ge=1, le=20),
 ) -> list[NameSuggestion]:
     """Kandidat nama untuk person_id yang belum dikenali, dari kemiripan
-    embedding tracklet terhadap orang yang SUDAH bernama (Fase 3). Operator
+    embedding tracklet terhadap orang yang SUDAH bernama. Operator
     yang memutuskan lewat PATCH /persons/{id} — endpoint ini TIDAK PERNAH
-    menerapkan nama secara otomatis (lihat plan/06-decisions.md)."""
+    menerapkan nama secara otomatis."""
     pool = request.app.state.pool
 
     ref_embedding = await pool.fetchval(

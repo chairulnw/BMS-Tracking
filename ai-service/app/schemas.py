@@ -42,18 +42,10 @@ class HealthResponse(BaseModel):
 
 
 class StreamStartRequest(BaseModel):
-    line:                  LineConfig | None = None
     conf_threshold:        float             = DEFAULT_CONF_THRESHOLD
     reid_threshold:        float             = ASSOC_THRESHOLD
-    # ponytail: true untuk evaluasi terisolasi (mis. file-playlist akurasi) —
-    # gallery hari ini TIDAK dipulihkan dari DB, IdentityDB mulai kosong.
-    # Default false: perilaku produksi tidak berubah.
-    skip_gallery_restore:  bool              = False
-    # Independen dari skip_gallery_restore — default ngikut skip_gallery_restore
-    # kalau None (perilaku lama: evaluasi terisolasi juga skip rekaman klip).
-    # Set eksplisit False kalau mau tetap terisolasi (skip_gallery_restore=True)
-    # TAPI tetap ngerekam klip ber-bbox buat verifikasi visual hasil.
-    skip_recording:        "bool | None"     = None
+    skip_gallery_restore:  bool              = False  # True untuk evaluasi terisolasi — gallery hari ini TIDAK dipulihkan dari DB
+    skip_recording:        "bool | None"     = None  # None → ikut skip_gallery_restore; set False eksplisit buat tetap terisolasi TAPI merekam klip
 
 
 class RenameRequest(BaseModel):

@@ -16,7 +16,6 @@ const BUCKET_MINUTES = 5;
 interface PersonDetail {
   id: number;
   name:               string;
-  label:              string;
   jabatan:            string | null;
   is_known:           boolean;
   last_camera:        string | null;
@@ -28,13 +27,11 @@ interface PersonDetail {
 
 interface FeedItem {
   detection_id:    number;
-  person_id:       number | null;
   camera_id:       string;
   camera_name:     string | null;
   camera_location: string | null;
   timestamp:       string;
   thumbnail_url:   string | null;
-  tracklet_id:     number | null;
 }
 
 interface FeedResponse {

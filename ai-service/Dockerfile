@@ -19,7 +19,7 @@ COPY requirements.txt .
 # exist") unless both come from here. Installed first so ultralytics'
 # unpinned deps are already satisfied with the matched build.
 #
-# ponytail: switch to https://download.pytorch.org/whl/cpu instead if
+# Switch to https://download.pytorch.org/whl/cpu instead if
 # deploying to a machine with no NVIDIA GPU — TransReID (ViT-B) on CPU is
 # heavy enough to make the whole service unresponsive under real load
 # (observed: 502s / connection-refused from backend while ai-service was

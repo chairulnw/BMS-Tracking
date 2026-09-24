@@ -1,4 +1,4 @@
-"""Telegram notification untuk event critical (plan2/spesifikasi.md Fase 1).
+"""Telegram notification untuk event critical.
 Gratis, tanpa verifikasi bisnis — buat bot lewat @BotFather, isi TELEGRAM_BOT_TOKEN
 + TELEGRAM_CHAT_ID di .env. Kalau salah satu kosong, notify jadi no-op."""
 

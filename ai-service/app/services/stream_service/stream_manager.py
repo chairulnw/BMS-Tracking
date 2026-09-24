@@ -13,8 +13,6 @@ from app.services.stream_service.cam_slot import _CamSlot, _camera_id_from_url
 
 
 class StreamManager:
-    """Public API; satu instance di app.state."""
-
     def __init__(self) -> None:
         self._slots:            list[_CamSlot]       = []
         self._processor:        BatchProcessor | None = None
@@ -25,10 +23,7 @@ class StreamManager:
         self._video_identities: list[IdentityRecord]  = []
         self._shared_db:        IdentityDB | None     = None
 
-        # Model YOLO/ReID di-cache di sini setelah pertama kali di-load, supaya
-        # restart stream (yang sekarang otomatis kejadian tiap kamera di-save)
-        # tidak reload model dari disk berulang-ulang. Lock terpisah dari
-        # self._lock supaya status() tidak ikut ke-block selama loading.
+        # Cache model setelah pertama kali di-load, lock terpisah biar status() tidak ke-block.
         self._model_lock = threading.Lock()
         self._models = None  # _ModelBundle | None
 
@@ -48,7 +43,6 @@ class StreamManager:
         reid_model:     str,
         conf_threshold: float,
         reid_threshold: float,
-        line           = None,   # legacy, tidak digunakan — garis diambil dari DB
         skip_gallery_restore: bool = False,          # True untuk evaluasi terisolasi
         skip_recording: "bool | None" = None,   # None → ikut skip_gallery_restore (perilaku lama)
     ) -> None:
@@ -57,8 +51,7 @@ class StreamManager:
         if self._running:
             raise RuntimeError("Stream sudah berjalan. Panggil /stream/stop dulu.")
 
-        # Loading model (mahal, sekali per proses) dilakukan DI LUAR self._lock —
-        # dia gak menyentuh state bersama, jadi status()/route lain gak perlu nunggu.
+        # Loading model dilakukan DI LUAR self._lock — status()/route lain gak perlu nunggu.
         models = self._get_or_load_models(detector_model, reid_model)
 
         with self._lock:
@@ -94,19 +87,13 @@ class StreamManager:
                 for cfg in cam_configs
             ]
 
-            # Shared IdentityDB (PAR extractor wired in setelah models siap)
             shared_db = IdentityDB(reid_threshold)
             shared_db._par = models.par
             self._shared_db = shared_db
             for slot in self._slots:
                 slot.db = shared_db
 
-            # Pulihkan gallery ReID hari ini dari DB — supaya restart AI service
-            # di tengah hari tidak membuat orang yang sama dapat Person ID baru
-            # (plan/07-fase2-detail.md §7). Hanya tracklet hari ini, sesuai ADR-001.
-            # Dilewati kalau skip_gallery_restore=True (evaluasi terisolasi,
-            # mis. akurasi via file-playlist) — shared_db tetap kosong-baru,
-            # tidak menyentuh atau terpengaruh data live di DB.
+            # Pulihkan gallery ReID hari ini — supaya restart AI service di tengah hari tidak beri Person ID baru ke orang yang sama.
             if skip_gallery_restore:
                 print("[stream] skip_gallery_restore=True — IdentityDB mulai kosong.")
             else:

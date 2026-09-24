@@ -1,19 +1,11 @@
-"""Wrapper TransReID (ViT-B/16, checkpoint resmi fine-tuned Market1501) biar
-bisa dipanggil persis seperti torchreid.utils.FeatureExtractor:
-__call__(list[crop RGB uint8]) -> tensor embedding [N, 3840]. Dipakai
-batch_processor.py saat REID_MODEL=transreid.
+"""Wrapper TransReID (ViT-B/16, checkpoint resmi Market1501) — __call__(list[crop RGB uint8]) -> tensor embedding [N, 3840].
 
-Model dibangun lewat make_model() TransReID/model/make_model.py dengan JPM +
-SIE_CAMERA aktif (config configs/Market/vit_transreid_stride.yml — checkpoint
-resmi "TransReID*(ViT)" Market1501 dari README repo, mAP 89.0/R1 95.1, BUKAN
-bobot ImageNet polos). Output eval-mode = concat(global_feat, 4x local_feat/4)
-per make_model.py build_transformer_local.forward(), 768*5=3840 dim.
+Checkpoint resmi "TransReID*(ViT)" Market1501 (mAP 89.0/R1 95.1), BUKAN bobot
+ImageNet polos. Output = concat(global_feat, 4x local_feat/4), 768*5=3840 dim.
 
-SIE_CAMERA butuh index kamera Market1501 (0-5) per sample — surveillance feed
-kita tidak punya pemetaan itu, jadi cam_label dipatok 0 buat semua crop
-(ponytail: sedikit sub-optimal dibanding index kamera asli, tapi SIE cuma
-nambah bias posisi kecil, bukan penentu utama; upgrade ke index per-kamera
-kalau perlu akurasi lebih presisi).
+SIE_CAMERA butuh index kamera Market1501 (0-5) per sample; feed kita tidak
+punya pemetaan itu, jadi cam_label dipatok 0 buat semua crop — sub-optimal
+tapi SIE cuma nambah bias posisi kecil, bukan penentu utama.
 """
 
 import os
@@ -25,10 +17,7 @@ import torch
 import torch.nn.functional as F
 
 _AI_SERVICE_DIR = Path(__file__).resolve().parents[3]
-# TRANSREID_REPO_DIR override: di Docker, kode ini di-COPY ke image di build
-# time ke path di luar checkpoints/ (lihat Dockerfile) — checkpoints/ sendiri
-# di-bind-mount runtime, dan folder TransReID/ (isinya banyak file kecil +
-# .git) kerap gagal ke-mount utuh dari drive Windows non-C:.
+# TRANSREID_REPO_DIR override: di Docker, folder TransReID/ (banyak file kecil + .git) kerap gagal ke-mount utuh dari drive Windows non-C:.
 _REPO_DIR    = Path(os.getenv("TRANSREID_REPO_DIR", str(_AI_SERVICE_DIR / "checkpoints" / "TransReID")))
 _CONFIG_PATH = _REPO_DIR / "configs" / "Market" / "vit_transreid_stride.yml"
 _CKPT_PATH   = _AI_SERVICE_DIR / "checkpoints" / "vit_transreid_market1501.pth"   # bobot, sejajar checkpoint Re-ID lain
@@ -36,19 +25,13 @@ _IMG_SIZE    = (256, 128)   # (H, W) — samain dengan INPUT.SIZE_TEST config
 _MEAN = torch.tensor([0.5, 0.5, 0.5]).view(1, 3, 1, 1)   # PIXEL_MEAN/STD config (bukan ImageNet)
 _STD  = torch.tensor([0.5, 0.5, 0.5]).view(1, 3, 1, 1)
 
-# Nama generik yang tabrakan sama modul lain di app/ (par_service.py juga
-# `from config import ...`) — sys.modules cache by name, jadi harus di-evict
-# manual, bukan cukup ubah sys.path.
+# Nama generik yang tabrakan sama modul lain di app/ (par_service.py juga `from config import ...`) — harus di-evict manual dari sys.modules.
 _TRANSREID_TOP_PKGS = {"config", "datasets", "loss", "model", "processor", "solver", "utils"}
 
 
 class TransReIDExtractor:
     def __init__(self, device: str = "cpu") -> None:
-        # Simpan sys.modules entries yang mungkin sudah ke-cache dari tempat lain
-        # (mis. PAR sempat load duluan) buat nama-nama yang sama dipakai
-        # TransReID, biar bisa dipulihkan persis — bukan cuma dihapus — setelah
-        # import kita selesai. Load model sekali di awal proses (bukan tiap
-        # request), jadi biaya save/restore ini diabaikan.
+        # Simpan sys.modules entries yang mungkin sudah ke-cache dari tempat lain (mis. PAR), biar bisa dipulihkan persis setelah import kita selesai.
         _saved_mods = {k: v for k, v in sys.modules.items()
                        if k in _TRANSREID_TOP_PKGS or any(k.startswith(p + ".") for p in _TRANSREID_TOP_PKGS)}
         for k in _saved_mods:
@@ -70,8 +53,7 @@ class TransReIDExtractor:
         cfg.freeze()
 
         self.device = torch.device(device)
-        # num_class tidak dipakai di eval forward (classifier tidak dipanggil),
-        # camera_num=6/view_num=1 sesuai Market1501 (dataset asal checkpoint).
+        # num_class tidak dipakai di eval forward; camera_num=6/view_num=1 sesuai Market1501.
         self.model = make_model(cfg, num_class=751, camera_num=6, view_num=1)
         if _CKPT_PATH.exists():
             sd = torch.load(str(_CKPT_PATH), map_location="cpu")

@@ -50,7 +50,7 @@ def _fetch_cameras() -> list[dict]:
 
 def _fetch_tracklet_gallery() -> list[dict]:
     """Ambil gallery tracklet hari ini (embedding + label per orang) untuk
-    memulihkan IdentityDB saat stream/start (plan/07-fase2-detail.md §7).
+    memulihkan IdentityDB saat stream/start.
     started_at/ended_at diparse jadi datetime aware; embedding tetap list[float]."""
     from datetime import datetime as _dt
     try:
@@ -248,7 +248,7 @@ class _BackendClient:
         mentah — par_attrs() dipanggil DI DALAM _do() di bawah, yang jalan di
         worker thread _PostQueue (background), bukan thread inferensi utama.
         Ini yang membuat biaya ~2.3s/crop PAR tidak menahan pemrosesan kamera
-        lain (lihat plan/04-tasks.md T3.2)."""
+        lain."""
         def _do() -> None:
             attrs = None
             try:

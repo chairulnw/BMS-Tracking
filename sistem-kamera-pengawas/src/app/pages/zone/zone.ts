@@ -63,7 +63,6 @@ interface OccupancyRow {
 interface HistoryPoint { bucket: string; count_in: number; count_out: number; }
 
 interface ZoneOccupant {
-  person_id:     number | null;
   person_label:  string | null;
   person_name:   string | null;
   is_known:      boolean;

@@ -18,10 +18,10 @@ def _parse_vector(raw: str) -> list[float]:
 
 @router.post("", response_model=TrackletResponse, status_code=201)
 async def create_tracklet(req: TrackletCreate, request: Request) -> TrackletResponse:
-    """Dipanggil AI service saat tracklet ditutup (lihat plan/07-fase2-detail.md §4).
+    """Dipanggil AI service saat tracklet ditutup.
     `person_id` diresolusi dari `person_label` lewat lookup sederhana — pembuatan
     baris `persons` sepenuhnya jadi tanggung jawab `POST /detections`, yang
-    (per urutan di §4) selalu dikirim lebih dulu."""
+    selalu dikirim lebih dulu."""
     pool = request.app.state.pool
 
     person_id = None
@@ -48,9 +48,9 @@ async def create_tracklet(req: TrackletCreate, request: Request) -> TrackletResp
     # detections.tracklet_id tidak pernah dikirim AI service (POST /detections
     # dan POST /tracklets adalah dua request independen, tidak ada id bersama
     # di antara keduanya). Sambungkan di sini: POST /detections SELALU dikirim
-    # lebih dulu untuk tracklet yang sama (lihat plan/07-fase2-detail.md §4),
-    # dan _post_queue satu worker FIFO menjamin urutan tiba di DB tetap sama —
-    # jadi deteksi ter-unlink TERBARU milik kamera+orang ini pasti pasangannya.
+    # lebih dulu untuk tracklet yang sama, dan _post_queue satu worker FIFO
+    # menjamin urutan tiba di DB tetap sama — jadi deteksi ter-unlink TERBARU
+    # milik kamera+orang ini pasti pasangannya.
     if person_id is not None:
         await pool.execute(
             """
@@ -64,13 +64,9 @@ async def create_tracklet(req: TrackletCreate, request: Request) -> TrackletResp
             row["id"], req.camera_id, person_id,
         )
 
-        # Crossing events dikirim SAAT terjadi, sebelum tracklet-nya ditutup —
-        # identitasnya belum ada, jadi person_label selalu NULL di situ (lihat
-        # komentar batch_processor.py). Begitu tracklet ini resolve, backfill
-        # event yang jatuh dalam rentang waktunya supaya "Sedang Berada di
-        # Zona" & riwayat kejadian ikut terisi nama/fotonya. Longgar ±2 detik
-        # di kedua ujung — crossing di frame terakhir bisa ke-timestamp SEDIKIT
-        # setelah ended_at (track hilang di frame yang sama saat garis dilewati).
+        # Crossing events dikirim sebelum tracklet ditutup, jadi person_label-nya
+        # masih NULL. Backfill sekarang, longgar ±2 detik karena crossing di
+        # frame terakhir bisa ke-timestamp sedikit setelah ended_at.
         await pool.execute(
             """
             UPDATE occupancy_events
@@ -91,10 +87,9 @@ async def gallery(
     request: Request,
     date_filter: date | None = Query(None, alias="date"),
 ) -> list[TrackletGalleryEntry]:
-    """Dipanggil AI service saat `stream/start` untuk memulihkan gallery ReID
-    (plan/07-fase2-detail.md §7). Hanya tracklet **hari ini** (Asia/Jakarta) dan
-    yang sudah beridentitas — konsekuensi langsung ADR-001 (asosiasi tidak
-    menembus batas hari). Maks 5 embedding terbaru per orang, mengikuti
+    """Dipanggil AI service saat `stream/start` untuk memulihkan gallery ReID.
+    Hanya tracklet **hari ini** (Asia/Jakarta) dan yang sudah beridentitas —
+    label person tidak menembus batas hari. Maks 5 embedding terbaru per orang, mengikuti
     MAX_BANK_SIZE di AI service."""
     pool = request.app.state.pool
     if date_filter is None:

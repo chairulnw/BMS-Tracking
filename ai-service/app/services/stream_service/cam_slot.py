@@ -49,8 +49,6 @@ def _open_capture(url: str) -> "cv2.VideoCapture | None":
 
 
 class _CamSlot:
-    """Data + capture thread per kamera. Tidak ada inference di sini."""
-
     def __init__(
         self,
         camera_id:          str,
@@ -64,10 +62,9 @@ class _CamSlot:
         self.analytics_enabled  = analytics_enabled
         self.skip_recording     = skip_recording
         self._rtsp_url   = rtsp_url
-        # Playlist: comma-separated file paths → sequential playback
         parts = [p.strip() for p in rtsp_url.split(",")]
-        self._playlist   = [p for p in parts if Path(p).is_file()]
-        # Event-aware playlist: di-set oleh StreamManager untuk koordinasi antar kamera
+        self._playlist   = [p for p in parts if Path(p).is_file()]  # sequential file playback
+        # Di-set StreamManager untuk koordinasi antar kamera
         self._playlist_events: list[tuple[str, threading.Event | None, threading.Event | None]] | None = None
         self._stop_event = stop_event
 
@@ -75,13 +72,12 @@ class _CamSlot:
         self.tracker:     BYTETracker | None  = None
         self.recorder:    ClipRecorder | None = None
         self.last_frame:  np.ndarray | None   = None
-        # Metadata frame terbaru saat mode playlist file (untuk _PredictionLogger)
+        # Metadata frame mode playlist file, untuk _PredictionLogger
         self.last_source_clip: str | None     = None
         self.last_local_frame: int | None     = None
         self.last_decode_ms:   float          = 0.0   # durasi cap.read() terakhir (_LatencyLogger)
 
-        # Zona (line + polygon) yang dipantau kamera ini
-        self.zones: list[dict]                             = []
+        self.zones: list[dict]                             = []  # line + polygon dipantau kamera ini
         self._side_hist:      dict[tuple, deque]           = {}
         self._last_dir:       dict[tuple, str]              = {}
         self._crossing_ts:    dict[tuple, float]            = {}  # cooldown per (zone_camera_id[+seg], track_id)
@@ -92,17 +88,11 @@ class _CamSlot:
         self.height = 1080
 
         self._cap:        cv2.VideoCapture | None = None
-        # Dibatasi (bukan tak terbatas) — proses frame TERBARU, buang yang lama
-        # kalau penuh. Antrian tak terbatas dicoba untuk file-playlist tapi bikin
-        # backlog: frame yang di video aslinya berjarak sepersekian detik bisa
-        # keproses berdetik-detik terpisah, salah-nutup gap-detection tracklet
-        # (TRACKLET_GAP_CYCLES di pipeline_service.py). Ukuran 5 beri toleransi
-        # jitter tanpa balik ke backlog tak terbatas.
+        # Dibatasi: proses frame TERBARU, buang lama kalau penuh — antrian tak
+        # terbatas bikin backlog salah-nutup gap-detection tracklet.
         self.frame_q:     queue.Queue             = queue.Queue(maxsize=5)
-        # Diisi LANGSUNG oleh BatchProcessor tiap siklus dengan (frame, has_person,
-        # annots) sebagai satu paket atomik — bukan thread capture, karena capture
-        # jauh lebih cepat dari analisis dan box akan selalu telat vs frame kalau
-        # disuplai independen (3 pendekatan lain sudah dicoba, semua gagal).
+        # Diisi langsung oleh BatchProcessor tiap siklus, supaya box selalu
+        # cocok frame-nya (bukan telat dari thread capture terpisah).
         self.rec_q:       queue.Queue             = queue.Queue(maxsize=90)
         self._rec_thread: threading.Thread | None = None
         self._cap_stop:   threading.Event         = threading.Event()
@@ -149,11 +139,7 @@ class _CamSlot:
         return True
 
     def start_reconnect(self, done_cb) -> None:
-        """Reconnect async agar batch loop tidak berhenti menunggu. Tidak
-        pernah give-up permanen: percobaan cepat (RECONNECT_TRIES) untuk lapor
-        offline secepatnya, lalu lanjut coba di background tiap
-        BACKGROUND_RETRY_DELAY selama service masih jalan — begitu kamera
-        beneran nyala lagi, otomatis connect tanpa restart manual."""
+        """Reconnect async agar batch loop tidak berhenti menunggu. Tidak pernah give-up permanen — lapor offline setelah RECONNECT_TRIES, lalu tetap coba tiap BACKGROUND_RETRY_DELAY."""
         self.online = False
 
         def _worker():
@@ -194,8 +180,7 @@ class _CamSlot:
             except queue.Empty:
                 break
         if self._playlist:
-            # rec_q di sini cuma buat sinyal _CLIP_STOP (klip sumber pindah
-            # file) — frame rekaman sendiri disuplai BatchProcessor langsung.
+            # rec_q di sini cuma buat sinyal _CLIP_STOP — frame rekaman disuplai BatchProcessor langsung.
             rec_q = None if self.skip_recording else self.rec_q
             ev_playlist = self._playlist_events or [(p, None, None) for p in self._playlist]
             target = _CamSlot._capture_loop_files
@@ -229,10 +214,7 @@ class _CamSlot:
             self._state["running"] = False
 
     def _recorder_loop(self, rec_q: queue.Queue, stop: threading.Event) -> None:
-        """rec_q diisi BatchProcessor dengan (frame, has_person, annots) —
-        satu paket atomik per siklus, jadi box di sini SELALU cocok sama
-        frame-nya, gak perlu dicocokkan/divalidasi lagi (lihat komentar di
-        __init__ dan pemanggil di batch_processor.py)."""
+        """rec_q diisi BatchProcessor dengan (frame, has_person, annots) sebagai satu paket atomik per siklus — box di sini selalu cocok frame-nya."""
         while not stop.is_set():
             try:
                 item = rec_q.get(timeout=0.1)
@@ -254,10 +236,7 @@ class _CamSlot:
         frame_q: queue.Queue,
         stop: threading.Event,
     ) -> None:
-        """Hanya baca cap.read() dan simpan frame terbaru. RTSP tetap hidup
-        terlepas dari seberapa lambat batch inference berjalan. Rekaman TIDAK
-        disuplai dari sini lagi — BatchProcessor yang push ke rec_q langsung
-        (lihat _recorder_loop), biar box selalu cocok sama frame-nya."""
+        """Hanya baca cap.read() dan simpan frame terbaru — RTSP tetap hidup terlepas kecepatan batch inference. Rekaman disuplai BatchProcessor langsung, bukan dari sini."""
         while not stop.is_set():
             _t0 = time.perf_counter()
             ok, frame = cap.read()
@@ -276,10 +255,7 @@ class _CamSlot:
                 except queue.Empty:
                     pass
             try:
-                # item selalu (frame, decode_ms, source_clip, local_frame) —
-                # None dua terakhir buat RTSP (bukan file-playlist), disamain
-                # sama _capture_loop_files() biar consumer di batch_processor.py
-                # unpack satu bentuk aja, bukan cek isinstance tuple/ndarray.
+                # (frame, decode_ms, source_clip, local_frame) — None dua terakhir buat RTSP, samakan bentuk dgn _capture_loop_files().
                 frame_q.put_nowait((frame, decode_ms, None, None))
             except queue.Full:
                 pass
@@ -328,10 +304,6 @@ class _CamSlot:
                     except queue.Empty:
                         pass
                 try:
-                    # (frame, decode_ms, source_clip, local_frame) — source_clip/
-                    # local_frame dipakai BatchProcessor buat logging prediksi;
-                    # RTSP kirim bentuk sama dengan 2 field terakhir None.
-                    # Rekaman TIDAK disuplai dari sini — lihat _recorder_loop.
                     frame_q.put_nowait((frame, decode_ms, clip_name, local_frame))
                 except queue.Full:
                     pass

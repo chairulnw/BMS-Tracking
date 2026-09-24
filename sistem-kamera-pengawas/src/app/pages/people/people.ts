@@ -23,7 +23,6 @@ interface FeedItem {
   camera_location: string | null;
   timestamp:       string;
   thumbnail_url:   string | null;
-  tracklet_id:     number | null;
 }
 
 interface FeedResponse {
@@ -47,7 +46,6 @@ interface PersonCard {
   camera_location: string | null;
   camera_id:       string;
   timestamp:       string;
-  tracklet_id:     number | null;
 }
 
 interface Camera {
@@ -97,7 +95,7 @@ const ACCESSORIES: { id: string; label: string; attrNames: string[] }[] = [
 
 // State terakhir sebelum user membuka Person Investigation — dipulihkan saat
 // kembali ke /people. Hilang saat full reload (memang: reload = mulai bersih).
-// ponytail: module var, cukup satu file — bukan RouteReuseStrategy.
+// Module var, cukup satu file — bukan RouteReuseStrategy.
 interface PeopleSnapshot {
   activeTab: 'deteksi' | 'orang';
   searchQuery: string;
@@ -145,7 +143,7 @@ export class People implements OnInit {
   selectedCameras: string[] = [];
   showCameraPanel = false;
 
-  // Filter atribut (Fase 3, dari PAR) — kosong/null = tidak difilter.
+  // Filter atribut (dari PAR) — kosong/null = tidak difilter.
   upperColors: string[] = [];
   lowerColors: string[] = [];
   gender: 'male' | 'female' | null = null;

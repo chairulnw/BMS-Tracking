@@ -1,16 +1,12 @@
 """Rekam klip video per kamera saat ada orang terdeteksi, plus logger CSV
 prediksi untuk mode file-playback (dibandingkan dengan ground truth).
 
-Encoder: recorder emit `_latest` pada kadens TETAP OUT_FPS terkunci ke `now`
-(wall clock yang di-pass, bukan wall clock ffmpeg — tahan walau recorder thread
-ketinggalan), lalu di-pipe ke subprocess `ffmpeg` CFR yang encode langsung ke MP4.
-Hasilnya:
-  - playback PERSIS real-time — frames_written/OUT_FPS == detik `now` nyata;
-  - burst cepat (source <= OUT_FPS) tetap kesimpan → gerak halus;
-  - stall → `_latest` ditulis berulang selama gap (BEKU), bukan diregangkan;
-  - output langsung MP4 → browser muter tanpa transcode terpisah, dan cv2
-    VideoWriter mp4v yang nggak reliable di macOS nggak kepakai.
-Sidecar `.dur` (durasi detik) tetap ditulis buat clips.py._find_clip().
+Encoder: emit `_latest` pada kadens TETAP OUT_FPS terkunci ke wall clock
+`now` (bukan wall clock ffmpeg — tahan walau recorder thread ketinggalan),
+di-pipe ke `ffmpeg` CFR langsung ke MP4 (bukan cv2 VideoWriter mp4v, nggak
+reliable di macOS). Stall → `_latest` ditulis berulang (BEKU), bukan
+diregangkan — playback tetap sinkron real-time.
+Sidecar `.dur` (durasi detik) ditulis buat clips.py._find_clip().
 """
 
 import csv
@@ -24,9 +20,7 @@ import cv2
 import numpy as np
 
 CLIP_COOLDOWN  = 5.0
-# klip < ini dibuang (bukan gerakan selesai, tapi giliran kamera habis atau klip
-# sumber terlalu pendek) — nggak cukup buat _find_clip, cuma nyampah di clips/
-MIN_CLIP_SEC   = float(os.getenv("CLIP_MIN_DURATION_SEC", "1.0"))
+MIN_CLIP_SEC   = float(os.getenv("CLIP_MIN_DURATION_SEC", "1.0"))  # klip < ini dibuang, cuma nyampah di clips/
 MAX_FRAME_GAP  = 3.0   # detik — gap nyata antar frame > ini → tutup klip
 CLIP_MAX_DURATION = float(os.getenv("CLIP_MAX_DURATION", "90"))  # detik — segment klip lewat ini (standar CCTV)
 CLIPS_DIR      = Path("output/clips")
@@ -45,11 +39,10 @@ class _PredictionLogger:
     khusus untuk kamera yang jalan lewat _capture_loop_files (playlist file lokal).
     Dipakai untuk dibandingkan dengan ground truth hasil anotasi manual.
 
-    Fase 2: identitas baru diketahui saat TRACKLET ditutup, bukan per-frame
-    (lihat plan/07-fase2-detail.md §6). Jadi baris tiap frame di-buffer per
-    (cam_id, track_id) lewat buffer(), baru benar-benar ditulis ke file lewat
-    flush() sekali tracklet-nya resolve — dengan nama akhir yang sudah pasti,
-    bukan placeholder f"t{track_id}"."""
+    Identitas baru diketahui saat TRACKLET ditutup, bukan per-frame. Jadi
+    baris tiap frame di-buffer per (cam_id, track_id) lewat buffer(), baru
+    benar-benar ditulis ke file lewat flush() sekali tracklet-nya resolve —
+    dengan nama akhir yang sudah pasti, bukan placeholder f"t{track_id}"."""
 
     _HEADER = ["source_clip", "local_frame", "camera", "person_pred", "x", "y", "w", "h"]
 
@@ -184,8 +177,7 @@ class ClipRecorder:
 
     def _start(self, now: float) -> None:
         CLIPS_DIR.mkdir(parents=True, exist_ok=True)
-        # milidetik ikut biar segment (CLIP_MAX_DURATION) / restart cepat di detik
-        # yang sama nggak nabrak nama. clips.py._find_clip parse dua format.
+        # Milidetik ikut biar restart cepat di detik yang sama nggak nabrak nama file.
         ts   = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
         path = CLIPS_DIR / f"clip_{self._camera_id}_{ts}.mp4"
         cmd = [
@@ -249,7 +241,7 @@ class ClipRecorder:
 
 
 def _demo() -> None:
-    """ponytail self-check: rekam laju IRREGULAR (burst + stall) lewat pipe
+    """Self-check: rekam laju IRREGULAR (burst + stall) lewat pipe
     ffmpeg, force_stop() pertengahan RECORDING, verifikasi MP4 valid & durasinya
     ngikut wall clock (bukan jumlah frame)."""
     import shutil

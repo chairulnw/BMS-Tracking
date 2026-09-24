@@ -11,9 +11,7 @@ from ultralytics import YOLO
 
 load_dotenv()   # baca .env sebelum apapun
 
-# ponytail: monkeypatch print() sekali di titik masuk biar semua log terminal
-# (main.py + stream_service/*) kepakai timestamp, tanpa ubah puluhan call
-# site satu-satu. Kalau nanti butuh level/filter, ganti ke logging module.
+# Monkeypatch print() sekali di titik masuk biar semua log terminal pakai timestamp, tanpa ubah puluhan call site satu-satu.
 _print = builtins.print
 def _print_with_ts(*args, **kwargs):
     _print(f"[{datetime.now().strftime('%H:%M:%S')}]", *args, **kwargs)
@@ -27,8 +25,7 @@ from app.schemas import DEFAULT_CONF_THRESHOLD, ASSOC_THRESHOLD
 from app.services import retention
 from app.services.stream_service import StreamManager
 
-# .env cukup nama file (mis. "yolo26n.pt") — folder checkpoints/ digabung di
-# sini, satu tempat, biar gak perlu ditulis ulang tiap kombinasi/dokumentasi.
+# .env cukup nama file (mis. "yolo26n.pt") — folder checkpoints/ digabung di sini, satu tempat.
 DETECTOR_MODEL = f"checkpoints/{os.getenv('DETECTOR_MODEL', 'yolo26n.pt')}"
 REID_MODEL = "transreid"   # satu-satunya ReID yang didukung — lihat batch_processor.py
 
@@ -56,10 +53,7 @@ async def lifespan(app: FastAPI):
     app.state.stream_manager = StreamManager()
     print("[startup] models ready\n")
 
-    # ponytail: dipakai run_comparison.py — auto-start di boot (tanpa
-    # skip_gallery_restore) sempat nulis ke DB beneran sebelum sempat
-    # di-/stream/stop, nyampur tracklet antar kombinasi (beda dimensi
-    # embedding per model Re-ID). DISABLE_AUTOSTART matiin itu buat evaluasi.
+    # Auto-start bisa nulis ke DB beneran sebelum sempat di-/stream/stop, nyampur tracklet antar kombinasi model. DISABLE_AUTOSTART matiin itu buat evaluasi manual.
     if os.getenv("DISABLE_AUTOSTART"):
         print("[startup] auto-start dilewati (DISABLE_AUTOSTART)")
     else:

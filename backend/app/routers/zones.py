@@ -229,8 +229,8 @@ async def get_occupancy(
 async def zone_occupants(zone_id: int, request: Request) -> list[ZoneOccupantResponse]:
     """Siapa saja yang SEDANG ada di zona ini sekarang. Dikelompokkan per
     `person_label` kalau ada — tapi crossing yang terjadi SEBELUM tracklet-nya
-    resolve dapat `person_label = NULL` (lihat `08-pipeline-flow.md` §9), jadi
-    fallback ke `(zone_camera_id, track_id)` supaya orang yang belum
+    resolve dapat `person_label = NULL`, jadi fallback ke
+    `(zone_camera_id, track_id)` supaya orang yang belum
     teridentifikasi tetap muncul di daftar (bukan cuma hilang, biar cocok
     dengan hitungan agregat `/occupancy` yang tidak peduli identitas).
     Per grup, ambil occupancy_event terakhirnya hari ini — kalau arah

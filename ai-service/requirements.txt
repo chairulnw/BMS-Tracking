@@ -1,8 +1,6 @@
 ultralytics>=8.3.0
 lap>=0.5.12
-yacs>=0.1.8   # config system dipakai vendored TransReID/config/
-# dependency vendored PromptPAR clip/ (app/par/clip/) — pip package "clip"
-# beneran TIDAK diinstall di sini, ini cuma library pendukungnya.
+yacs>=0.1.8
 tqdm>=4.66.0
 ftfy>=6.2.0
 regex>=2024.5.15
@@ -15,7 +13,4 @@ uvicorn[standard]>=0.30.0
 python-dotenv>=1.0.0
 PyJWT>=2.9.0
 psutil>=6.0.0
-# openai/CLIP (dipakai PARExtractor.detect_color_scored() untuk warna baju)
-# sengaja di-skip di sini — build dari git lambat. par_service.py sudah
-# nangkep ImportError-nya, jalan tanpa deteksi warna kalau paket ini absen.
-# Pasang lagi kalau perlu: git+https://github.com/openai/CLIP.git
+# kalau perlu fitur warna pakaian: git+https://github.com/openai/CLIP.git

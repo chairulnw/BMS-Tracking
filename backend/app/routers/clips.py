@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -10,42 +11,31 @@ from fastapi.responses import FileResponse
 
 router = APIRouter(prefix="/clips", tags=["clips"])
 
-# Klip direkam AI service ke ai-service/output/clips/. Backend baca langsung
-# dari disk (pola sama dgn thumbnails.py) supaya klip tetap bisa dilihat pas
-# AI service mati. Resolve relatif ke file ini: backend/app/routers/ → repo root.
+# Backend baca klip langsung dari disk AI service (pola sama dgn thumbnails.py)
+# supaya tetap bisa dilihat pas AI service mati.
 _REPO_ROOT = Path(__file__).parents[3]
 CLIPS_DIR = Path(os.getenv("CLIPS_DIR", str(_REPO_ROOT / "ai-service" / "output" / "clips")))
-# ponytail: transcode-on-request + disk cache, cukup buat admin preview sesekali.
-# Kalau nanti dipakai rame-rame, ganti ke pipeline transcode background pas clip
-# selesai direkam. Cache di folder AI service supaya retention.py-nya (yang
-# nge-cap ukuran output/) ikut mrunning-in file lama.
+# Transcode-on-request + disk cache di folder AI service, supaya retention.py
+# ikut membersihkan cache lama bareng output/ lainnya.
 CACHE_DIR = Path(os.getenv("CLIPS_WEB_DIR", str(_REPO_ROOT / "ai-service" / "output" / "clips_web")))
 
 
-# Rekaman kini termotion-gate + tersegmentasi (clip_recorder.py) → banyak klip
-# pendek dgn gap. Kalau target jatuh di gap, JANGAN balikin klip jauh sebelumnya
-# (bisa orang lain sama sekali). Toleransi kecil aja buat jitter timestamp event.
+# Toleransi kalau target jatuh di gap antar-klip — jangan balikin klip yang
+# jauh (bisa orang lain sama sekali).
 FALLBACK_MAX_GAP = float(os.getenv("CLIP_FALLBACK_MAX_GAP", "20"))
 
-# Klip file = rekaman scene utuh (bisa 90 dtk, banyak orang). Yang mau ditonton
-# cuma sekitar momen event → potong jendela ini (detik sebelum/sesudah target).
-# Juga jadi batas atas durasi tracklet yang dipakai buat wall_start (lihat di
-# bawah) — jendela lebih pendek = lebih mungkin muat di satu file rekaman.
+# Jendela potong di sekitar momen event, bukan seluruh klip (bisa 90 dtk).
 WINDOW_BEFORE = float(os.getenv("CLIP_WINDOW_BEFORE", "6"))
 WINDOW_AFTER  = float(os.getenv("CLIP_WINDOW_AFTER", "8"))
 
-
-import re
 
 _STAMP_ONLY_RE = re.compile(r"^(\d{8}_\d{6}(?:_\d+)?)$")
 
 
 def _clip_stamp(f: Path, camera_id: str) -> str | None:
-    """Cocokkan f cuma kalau stem-nya PERSIS clip_{camera_id}_{stamp} — bukan
-    prefix match. Glob "clip_c10_*" ikut nangkep "clip_c10_0910_*" (kamera
-    LAIN, c10_0910) karena "*" gak peduli batas nama kamera; di sini
-    validasi ulang: bagian setelah "clip_{camera_id}_" harus PERSIS pola
-    stempel waktu, bukan potongan camera_id kamera lain yang lebih panjang."""
+    """Cocokkan f cuma kalau stem-nya PERSIS clip_{camera_id}_{stamp}.
+    Glob "clip_c10_*" juga menangkap kamera lain "clip_c10_0910_*"; validasi
+    ulang di sini supaya bagian setelah prefix memang stempel waktu."""
     prefix = f"clip_{camera_id}_"
     if not f.stem.startswith(prefix):
         return None
@@ -54,10 +44,8 @@ def _clip_stamp(f: Path, camera_id: str) -> str | None:
 
 
 def _find_clip(camera_id: str, target: datetime) -> tuple[Path, datetime, float] | None:
-    """Cari klip yang jendela [mulai, mulai+durasi]-nya mencakup target.
-    Jika target jatuh di gap rekaman, fallback ke klip terdekat pada hari yang
-    sama. Balikin juga durasi file (dur) — dipakai caller buat clamp jendela
-    potong ffmpeg biar gak nyeek lewat akhir file (lihat get_clip)."""
+    """Cari klip yang jendela [mulai, mulai+durasi]-nya mencakup target,
+    fallback ke klip terdekat hari yang sama kalau target jatuh di gap."""
     candidates: list[tuple[datetime, datetime, Path]] = []
     all_files: list[Path] = [
         p for pat in (f"clip_{camera_id}_*.mp4", f"clip_{camera_id}_*.avi")
@@ -91,12 +79,11 @@ def _find_clip(camera_id: str, target: datetime) -> tuple[Path, datetime, float]
     if not candidates:
         return None
 
-    # 1. Prioritas: klip yang mencakup target secara langsung
     for ts, end, dur, f in candidates:
         if ts <= target <= end:
             return f, ts, dur
 
-    # 2. Fallback: klip terdekat pada hari yang sama
+    # Fallback: klip terdekat pada hari yang sama
     best_file: Path | None = None
     best_ts: datetime | None = None
     best_dur: float = 0.0
@@ -114,9 +101,7 @@ def _find_clip(camera_id: str, target: datetime) -> tuple[Path, datetime, float]
             best_ts = ts
             best_dur = dur
 
-    # Batas toleransi fallback (default 20 detik)
-    max_gap = FALLBACK_MAX_GAP
-    if best_file and best_ts and min_diff <= max_gap:
+    if best_file and best_ts and min_diff <= FALLBACK_MAX_GAP:
         return best_file, best_ts, best_dur
 
     return None
@@ -124,9 +109,7 @@ def _find_clip(camera_id: str, target: datetime) -> tuple[Path, datetime, float]
 
 def _cut_segment(src: Path, start: float, dur: float, dst: Path) -> None:
     """Potong [start, start+dur] dari src → dst (MP4 H.264). Re-encode (bukan
-    -c copy) biar mulai tepat di detik yang diminta, bukan lompat ke keyframe
-    terdekat (~12 dtk meleset). Segmen pendek, ultrafast → cepat, hasil di-cache.
-    `.fps` sidecar (klip .avi lama) dipakai buat laju baca yang bener."""
+    -c copy) biar mulai tepat di detik yang diminta, bukan di keyframe terdekat."""
     dst.parent.mkdir(parents=True, exist_ok=True)
     pre = []
     fps_sidecar = src.with_suffix(".fps")
@@ -142,24 +125,10 @@ def _cut_segment(src: Path, start: float, dur: float, dst: Path) -> None:
     subprocess.run(cmd, check=True, capture_output=True)
 
 
-import json
-
-_SAMPLE_CLIPS_JSON = Path(__file__).parents[1] / "data" / "sample_0910_clips.json"
-_SAMPLE_CLIPS_MAP: dict[str, dict] = {}
-if _SAMPLE_CLIPS_JSON.exists():
-    try:
-        _SAMPLE_CLIPS_MAP = json.loads(_SAMPLE_CLIPS_JSON.read_text())
-    except Exception as _e:
-        print(f"[clips] Warning: gagal load {_SAMPLE_CLIPS_JSON}: {_e}")
-
-
 @router.get("/{camera_id}")
 async def get_clip(camera_id: str, request: Request, timestamp: datetime = Query(...)) -> FileResponse:
-    """Cari klip rekaman kamera ini yang mencakup timestamp yang diminta.
-    Untuk data kejadian yang terpetakan secara presisi (seperti sample CCTV 2026-09-10),
-    langsung putar potongan presisi dari source clip tanpa jeda dan tanpa salah orang.
-    Untuk rekaman live RTSP, cari file klip di output/clips/ lalu potong segmen jendela
-    saat orang terekam."""
+    """Cari file klip di output/clips/ yang mencakup timestamp yang diminta,
+    lalu potong segmen jendela di sekitar momen orang terekam."""
     if "/" in camera_id or "\\" in camera_id or ".." in camera_id:
         raise HTTPException(400, "camera_id tidak valid")
     target = timestamp.astimezone(ZoneInfo("Asia/Jakarta")).replace(tzinfo=None) \
@@ -190,31 +159,9 @@ async def get_clip(camera_id: str, request: Request, timestamp: datetime = Query
                     camera_id, timestamp
                 )
             if row:
-                # 1. Jalur Utama: Jika deteksi ini memiliki mapping klip presisi (100% akurat)
-                det_id_str = str(row["id"])
-                if det_id_str in _SAMPLE_CLIPS_MAP:
-                    meta = _SAMPLE_CLIPS_MAP[det_id_str]
-                    clip_file = CACHE_DIR / meta["clip_filename"]
-                    if not clip_file.exists():
-                        src = _REPO_ROOT / meta["source_clip"]
-                        if src.exists():
-                            await asyncio.to_thread(
-                                _cut_segment, src, meta["start_sec"], meta["dur_sec"], clip_file
-                            )
-                    if clip_file.exists():
-                        return FileResponse(
-                            clip_file,
-                            media_type="video/mp4",
-                            filename=clip_file.name,
-                            content_disposition_type="inline"
-                        )
-
-                # 2. Ekstrak wall-clock asli rekaman jika rekaman live. Prioritas
-                # row["ended_at"] (tl.last_seen, waktu frame terakhir tracklet
-                # BENERAN terlihat) — bukan nama file thumbnail/created_at, yang
-                # keduanya distempel saat tracklet FINALISASI (bisa telat dari
-                # momen orang itu sebenarnya masih di frame), jadi jendela klip
-                # yang dipotong bisa geser ke momen setelahnya.
+                # Prioritas row["ended_at"] (waktu frame terakhir tracklet
+                # terlihat) atas created_at/nama thumbnail, yang distempel
+                # saat tracklet finalisasi dan bisa telat dari momen aslinya.
                 if row["ended_at"]:
                     wall_end = row["ended_at"].astimezone(ZoneInfo("Asia/Jakarta")).replace(tzinfo=None)
                 else:
@@ -232,14 +179,8 @@ async def get_clip(camera_id: str, request: Request, timestamp: datetime = Query
 
                 if wall_end:
                     if row["started_at"] and row["ended_at"]:
-                        # Dipotong ke CLIP_MAX_WINDOW_SEC (bukan durasi tracklet
-                        # penuh): tracklet bisa jauh lebih panjang dari satu file
-                        # rekaman (mis. gap nunggu giliran kamera lain di mode
-                        # file-playlist bikin ClipRecorder tutup-buka klip baru
-                        # berkali-kali di tengah tracklet yang sama) — jendela
-                        # penuh sering nembus habis 1 file lalu minta potongan
-                        # yang gak ada di situ. Jendela pendek di sekitar
-                        # wall_end jauh lebih mungkin muat di satu file.
+                        # Clamp ke WINDOW_BEFORE, bukan durasi tracklet penuh:
+                        # tracklet bisa nembus lebih dari satu file rekaman.
                         tracklet_dur = min(
                             max(1.0, (row["ended_at"] - row["started_at"]).total_seconds()),
                             WINDOW_BEFORE,
@@ -250,7 +191,6 @@ async def get_clip(camera_id: str, request: Request, timestamp: datetime = Query
         except Exception as exc:
             print(f"[clips] DB lookup error: {exc}")
 
-    # Prioritas rekaman live: cari klip memakai waktu rekam asli (wall-clock)
     found = None
     if wall_start:
         found = _find_clip(camera_id, wall_start)
@@ -263,7 +203,6 @@ async def get_clip(camera_id: str, request: Request, timestamp: datetime = Query
         raise HTTPException(404, "Klip tidak ditemukan untuk kamera/waktu ini")
     src, clip_start, clip_dur = found
 
-    # Potong persis saat orang tersebut terlihat (dengan padding 0.5s di awal, 1s di akhir)
     if wall_start and wall_end:
         p_start   = max(0.0, (wall_start - clip_start).total_seconds())
         p_end     = max(p_start + 1.0, (wall_end - clip_start).total_seconds())
@@ -274,13 +213,8 @@ async def get_clip(camera_id: str, request: Request, timestamp: datetime = Query
         seg_start = max(0.0, offset - 0.5)
         seg_dur   = max(3.0, 5.0)
 
-    # _find_clip bisa balikin klip FALLBACK (target di luar jendela [ts, end]
-    # klip ini, cuma paling dekat) — seg_start di atas dihitung relatif ke
-    # clip_start klip ini, bisa lewat jauh dari clip_dur asli (nyeek dekat/
-    # lewat akhir file → ffmpeg keluarin klip nyaris kosong, <1 detik, isinya
-    # potongan akhir file yang gak nyambung ke momen yang diminta). Clamp ke
-    # dalam batas file: kalau jendela yang diminta gak muat, mundurin
-    # seg_start biar seg_dur (minimal 1s) tetap muat di sisa durasi.
+    # Klip fallback: seg_start bisa lewat clip_dur asli. Clamp biar ffmpeg
+    # gak keluarin potongan nyaris kosong dari ujung file.
     if seg_start >= clip_dur:
         seg_start = max(0.0, clip_dur - 1.0)
     seg_dur = max(1.0, min(seg_dur, clip_dur - seg_start))

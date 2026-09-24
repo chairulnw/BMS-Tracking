@@ -248,7 +248,7 @@ END $$;
 
 CREATE INDEX IF NOT EXISTS idx_tracklets_person_started
     ON tracklets (person_id, started_at DESC);
--- ponytail: tanpa index ivfflat/hnsw di embedding (lihat DROP INDEX di atas —
+-- Tanpa index ivfflat/hnsw di embedding (lihat DROP INDEX di atas —
 -- pgvector cap index-nya di 2000 dim, TransReID 3840), similarity search di
 -- /people jalan exact scan. Cukup buat volume sekarang (ratusan-ribuan baris);
 -- kalau tracklets tumbuh jauh lebih besar, opsi: PCA/reduksi dimensi embedding

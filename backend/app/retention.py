@@ -1,4 +1,4 @@
-"""DB retention untuk detections/tracklets (plan2/spesifikasi.md Fase 4).
+"""DB retention untuk detections/tracklets.
 File clip/thumbnail sudah punya retensi sendiri (ai-service/app/services/
 retention.py) — ini versi baris database, supaya detections/tracklets gak
 tumbuh selamanya. Tidak menyentuh persons/camera_events (di luar scope item

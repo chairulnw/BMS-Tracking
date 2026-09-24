@@ -23,8 +23,8 @@ describe('People', () => {
     expect(component).toBeTruthy();
   });
 
-  it('starts with empty search and today as the date range', () => {
+  it('starts with empty search and today selected', () => {
     expect(component.searchQuery).toBe('');
-    expect(component.fromDate).toBe(component.toDate);
+    expect(component.selectedDate).toBeTruthy();
   });
 });

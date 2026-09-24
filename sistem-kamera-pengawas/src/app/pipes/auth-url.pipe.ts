@@ -13,8 +13,7 @@ export class AuthUrlPipe implements PipeTransform {
     if (!token) {
       return url;
     }
-    // Sisipkan token SEBELUM fragment (#t=... media fragment buat seek video) —
-    // kalau ditaruh di belakang, "#" bikin token jadi bagian fragment & auth gagal.
+    // Token must go before the "#t=..." media fragment, or it gets swallowed by the fragment and auth fails.
     const h = url.indexOf('#');
     const base = h >= 0 ? url.slice(0, h) : url;
     const frag = h >= 0 ? url.slice(h) : '';

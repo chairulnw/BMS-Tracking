@@ -63,10 +63,8 @@ class PeopleFeedResponse(BaseModel):
     limit: int
 
 
-# Sama persis strukturnya dengan PeopleFeedResponse — tapi `items` di sini
-# satu baris per PERSON (deteksi terakhirnya), bukan satu baris per deteksi.
-# Tipe terpisah supaya frontend eksplisit soal endpoint mana yang dipanggil,
-# walau isinya identik dengan PeopleFeedResponse.
+# Strukturnya sama dengan PeopleFeedResponse, tapi `items` di sini satu baris
+# per PERSON (deteksi terakhirnya), bukan satu baris per deteksi.
 class PersonsFeedResponse(BaseModel):
     items: list[PeopleFeedItem]
     total: int
@@ -332,10 +330,10 @@ class TrackletCreate(BaseModel):
     best_thumbnail_url:   str | None = None
     embedding:            list[float]         # 3840-dim TransReID (768*5, JPM+global), L2-normalized
     assoc_score:          float | None = None
-    attrs:                dict | None = None  # skor mentah PAR (Fase 3), None kalau PAR nonaktif
+    attrs:                dict | None = None  # skor mentah PAR, None kalau PAR nonaktif
     pos_x:                int | None = None  # titik kaki sampel ber-confidence tertinggi (fallback lama)
     pos_y:                int | None = None
-    positions:            list[list[int]] = []  # [[x,y], ...] seluruh titik kaki, urut waktu (Fase 4, Pergerakan)
+    positions:            list[list[int]] = []  # [[x,y], ...] seluruh titik kaki, urut waktu
 
 
 class TrackletResponse(BaseModel):
@@ -362,7 +360,7 @@ class TrackletGalleryEntry(BaseModel):
 
 
 class TrajectoryPoint(BaseModel):
-    """Satu singgahan kamera di urutan pergerakan orang (Fase 4, T4.2)."""
+    """Satu singgahan kamera di urutan pergerakan orang."""
     camera_id:   str
     camera_name: str | None
     zone_name:   str | None
@@ -372,7 +370,7 @@ class TrajectoryPoint(BaseModel):
 
 class DwellRecord(BaseModel):
     """Total waktu tinggal, dari tracklets per kamera ATAU pasangan IN/OUT
-    occupancy_events per zona line-crossing (T4.3). `kind` bedain sumbernya —
+    occupancy_events per zona line-crossing. `kind` bedain sumbernya —
     'camera' (selalu ada, gak butuh zona) vs 'zone' (cuma zona line-crossing;
     polygon sengaja gak dihitung di sini, itu tumpang tindih sama durasi
     kamera-nya sendiri)."""
@@ -394,7 +392,7 @@ class CameraPoint(BaseModel):
 
 class NameSuggestion(BaseModel):
     """Kandidat nama untuk orang yang belum dikenali, dari kemiripan embedding
-    terhadap orang yang SUDAH bernama N hari terakhir (Fase 3). Operator yang
+    terhadap orang yang SUDAH bernama N hari terakhir. Operator yang
     memutuskan — tidak pernah diterapkan otomatis."""
     person_id:     int
     name:          str

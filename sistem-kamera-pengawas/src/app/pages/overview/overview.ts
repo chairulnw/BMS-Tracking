@@ -28,14 +28,12 @@ interface OccupancyRoom {
 }
 
 interface Person {
-  id:                 number;
-  name:               string;
-  label:              string;
-  is_known:           boolean;
-  jabatan:            string | null;
-  last_camera:        string | null;
-  last_zone_name:     string | null;
-  best_thumbnail_url: string | null;
+  id:             number;
+  name:           string;
+  is_known:       boolean;
+  jabatan:        string | null;
+  last_camera:    string | null;
+  last_zone_name: string | null;
 }
 
 interface Camera {
@@ -50,7 +48,6 @@ interface CameraEvent {
   camera_name:  string | null;
   event_type:   string;
   category:     string;
-  description:  string | null;
   snapshot_url: string | null;
   timestamp:    string;    // jam AI service (event terjadi)
   created_at:   string;    // jam backend insert row ini
@@ -91,8 +88,7 @@ export class Dashboard implements OnInit {
   filterEventType  = '';
   filterCategory   = '';
 
-  // Instrumentasi evaluasi — cuma nyatet delta waktu ke console, gak ada UI
-  // baru. Set id biar tiap event cuma di-log sekali (bukan tiap poll ulang).
+  // Latency instrumentation: logs to console only, no UI. Tracks logged ids so each event logs once, not on every poll.
   private _loggedLatencyIds = new Set<number>();
 
   readonly EVENT_TYPES = [
@@ -120,9 +116,6 @@ export class Dashboard implements OnInit {
       takeUntilDestroyed(this.destroyRef),
     ).subscribe({ next: d => this.persons = d.slice(0, 5), error: () => {} });
 
-    // "Kejadian Terakhir" tadinya cuma dimuat sekali di awal + manual lewat
-    // tombol filter/paginasi — gak ikut auto-refresh kayak card lain, jadi
-    // kejadian baru gak muncul sampai user klik sesuatu. Disamakan di sini.
     interval(30000).pipe(
       startWith(0),
       takeUntilDestroyed(this.destroyRef),
@@ -210,14 +203,9 @@ export class Dashboard implements OnInit {
     });
   }
 
-  /** Instrumentasi evaluasi (bukan camera-to-dashboard — gak ada timestamp
-   * asli dari kamera). Backend delay = created_at - timestamp (network + insert
-   * backend). End-to-end = jam browser terima response - timestamp (AI).
-   * ai_latency_ms = total_ai_ms frame TERAKHIR kamera itu saat event
-   * digenerate (dikirim AI service, lihat batch_processor.py._last_ai_ms) —
-   * approx kasar, BUKAN rata-rata seluruh tracklet (beda granularitas
-   * per-frame vs per-event) — dan BUKAN komponen yang perlu dijumlahin ke
-   * end_to_end_ms (udah otomatis kehitung di situ, lihat diskusi latency). */
+  // ai_latency_ms is the AI service's total_ai_ms for that camera's last frame at event time (see
+  // batch_processor.py._last_ai_ms) — a rough per-frame approximation, not a per-event average, and
+  // already reflected in end_to_end_ms so it shouldn't be added to it again.
   private _logLatency(events: CameraEvent[], receivedAt: number): void {
     for (const ev of events) {
       if (this._loggedLatencyIds.has(ev.id)) continue;

@@ -21,21 +21,16 @@ _AI_URL = lambda: os.getenv("AI_SERVICE_URL", "http://localhost:8001")
 
 _RESTART_DEBOUNCE = 1.5  # detik — beberapa edit kamera beruntun cuma restart sekali
 _restart_task: "asyncio.Task | None" = None
-# Serialize the actual stop+start HTTP calls — _restart_task itself only ever
-# gets cancelled during its sleep (see _debounced_restart), never mid-flight,
-# but two debounce windows settling back-to-back could still fire overlapping
-# stop()/start() calls that race on ai-service's StreamManager and leave it
-# either 409ing or, worse, stopped-with-nothing-restarted.
+# Serialize the actual stop+start calls — two debounce windows settling
+# back-to-back could otherwise race on ai-service's StreamManager.
 _restart_lock: "asyncio.Lock | None" = None
 
 
 async def _restart_ai_stream() -> None:
     """Jadwalkan restart stream AI service (debounced) supaya perubahan kamera
-    (aktif/nonaktif, RTSP, dihapus) langsung berlaku tanpa perlu tombol manual.
-    Restart AI service reload model dari disk (mahal, beberapa detik) — kalau
-    beberapa kamera diedit berturut-turut, di-debounce jadi satu restart saja,
-    bukan sekali per save. Best-effort — kalau AI service down, CRUD kamera
-    tetap sukses; endpoint juga tidak menunggu restart selesai."""
+    langsung berlaku. Restart mahal (reload model), jadi beberapa edit
+    berturut-turut digabung jadi satu restart. Best-effort dan non-blocking —
+    kalau AI service down, CRUD kamera tetap sukses."""
     global _restart_task
     if _restart_task is not None and not _restart_task.done():
         _restart_task.cancel()
@@ -47,10 +42,8 @@ async def _debounced_restart() -> None:
         await asyncio.sleep(_RESTART_DEBOUNCE)
     except asyncio.CancelledError:
         return  # ada edit lain masuk, restart ini dibatalkan & digantikan yang baru
-    # Fire-and-forget dari sini — task ini (yang bisa di-cancel lagi oleh edit
-    # berikutnya) selesai tugasnya begitu sleep kelar. _do_restart jalan
-    # sebagai task terpisah yang tidak pernah di-cancel, jadi stop()/start()
-    # yang sudah mulai jalan tidak keputus di tengah oleh edit berikutnya.
+    # _do_restart jalan sebagai task terpisah yang tidak pernah di-cancel,
+    # jadi stop()/start() yang sudah mulai tidak keputus oleh edit berikutnya.
     asyncio.ensure_future(_do_restart())
 
 
@@ -60,9 +53,7 @@ async def _do_restart() -> None:
         _restart_lock = asyncio.Lock()
     async with _restart_lock:
         headers = {"Authorization": f"Bearer {create_access_token('backend-service')}"}
-        # ponytail: sama seperti get_snapshot — connection ke ai-service
-        # diamati intermiten, retry sekali lebih murah daripada ngejar root
-        # cause jaringan Docker yang belum pasti.
+        # Retry sekali — koneksi ke ai-service kadang gagal intermiten.
         for attempt in range(2):
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
@@ -202,10 +193,8 @@ async def create_camera(req: CameraIn, request: Request) -> CameraResponse:
 @router.put("/cameras/{cam_id}", response_model=CameraResponse)
 async def update_camera(cam_id: int, req: CameraIn, request: Request) -> CameraResponse:
     pool = request.app.state.pool
-    # camera_id itu identitas stabil, jangan re-derive dari rtsp_url tiap edit —
-    # kamera file-based (mis. sample/c8_sim vs sample3/c8_sim) share nama folder
-    # yang sama, re-derive di sini bikin update collide sama row lain yang sudah
-    # pakai camera_id itu (UniqueViolationError).
+    # camera_id itu identitas stabil, jangan re-derive dari rtsp_url tiap edit
+    # (kamera file-based bisa share nama folder → collide dengan row lain).
     camera_id = req.camera_id or await pool.fetchval(
         "SELECT camera_id FROM cameras WHERE id = $1", cam_id
     )
@@ -278,10 +267,7 @@ async def get_snapshot(camera_id: str, request: Request) -> Response:
     if row:
         params["rtsp_url"] = row["rtsp_url"]
     headers = {"Authorization": f"Bearer {create_access_token('backend-service')}"}
-    # ponytail: retry sekali kalau koneksi ke ai-service gagal — diamati
-    # intermiten (bukan permanen: request identik detik berikutnya sering
-    # berhasil), jadi ini lebih murah daripada ngejar root cause jaringan
-    # Docker yang belum pasti (bisa Docker Desktop-nya sendiri, timing, dll).
+    # Retry sekali — koneksi ke ai-service kadang gagal intermiten.
     last_exc: Exception | None = None
     for attempt in range(2):
         try:

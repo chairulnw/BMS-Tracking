@@ -13,25 +13,21 @@ async def create_detection(
 ) -> DetectionResponse:
     pool = request.app.state.pool
     now  = req.timestamp or datetime.now(timezone.utc)
-    # The original AI label is either explicitly provided or assumed equal to person_name
     label = (req.person_label or req.person_name).strip()
     name  = req.person_name.strip()
 
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # Find existing person: match by label first, then current name
             person = await conn.fetchrow(
                 "SELECT * FROM persons WHERE label = $1 OR name = $1 LIMIT 1",
                 label,
             )
             if person is None and label != name:
-                # Person was renamed by user; try matching by display name (known persons only)
                 person = await conn.fetchrow(
                     "SELECT * FROM persons WHERE name = $1 AND is_known = true LIMIT 1", name
                 )
 
             if person is None:
-                # First time we see this person — create a record
                 thumbnail = req.thumbnail_url
                 person = await conn.fetchrow(
                     """
@@ -44,12 +40,9 @@ async def create_detection(
                     name, label, now, req.camera_id, thumbnail, now.date(),
                 )
             else:
-                # Update last_seen / last_camera / thumbnail — tapi hanya kalau deteksi
-                # ini benar-benar lebih baru. Tracklet lintas kamera ditutup lewat
-                # background post-queue dan bisa sampai ke sini gak berurutan waktu
-                # (tracklet panjang di kamera A bisa selesai diproses SETELAH tracklet
-                # pendek di kamera B yang mulainya belakangan) — tanpa guard ini,
-                # "terakhir dilihat" bisa jadi POST paling akhir, bukan yang paling baru.
+                # GREATEST/CASE guard: tracklet close order via background
+                # post-queue tidak menjamin urutan waktu, jadi last_seen tidak
+                # boleh langsung ditimpa POST paling akhir.
                 person = await conn.fetchrow(
                     """
                     UPDATE persons

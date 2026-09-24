@@ -2,12 +2,11 @@
 Pipeline service — callable version tanpa GUI.
 Line coordinates diterima sebagai parameter, bukan dari klik mouse.
 
-Dua IdentityDB hidup di file ini (lihat plan/07-fase2-detail.md):
-- `IdentityDB`        — live stream, berbasis tracklet (Fase 2).
+Dua IdentityDB hidup di file ini:
+- `IdentityDB`        — live stream, berbasis tracklet.
 - `_LegacyIdentityDB` — dipakai HANYA oleh `process_video()` (analisis file
-  offline). Di luar cakupan Fase 2 (lihat 07-fase2-detail.md); logikanya
-  sengaja dibiarkan identik dengan versi sebelum Fase 2 supaya alat offline
-  ini tidak ikut berubah perilakunya.
+  offline). Logikanya sengaja dibiarkan identik dengan versi lama supaya
+  alat offline ini tidak ikut berubah perilakunya.
 """
 
 import math
@@ -33,9 +32,7 @@ BUFFER_FRAMES      = 10
 NEAR_LINE_DIST     = 40
 MIN_CROP_PX        = 32
 MIN_MARGIN         = 0.04   # gap minimum top1-top2 untuk confident match
-SEED_MIN_COHERENCE = 0.35   # tracklet identitas BARU: cosine pairwise terendah antar
-                            # sample-nya harus >= ini (rendah = sample tercampur/occlusion
-                            # → embedding mean degenerate jadi "magnet"). Tune dari log [reid].
+SEED_MIN_COHERENCE = 0.35   # tracklet identitas BARU: cosine pairwise terendah antar sample harus >= ini, atau embedding mean jadi "magnet" degenerate
 MAX_BANK_SIZE      = 5      # maks entry per identitas di bank embedding
 BANK_MERGE_SIM     = 0.90   # sim >= ini → update entry lama, bukan tambah baru
 BANK_EXPAND_MIN    = 0.67   # skor match tracklet >= ini → boleh tambah prototipe bank baru
@@ -54,24 +51,14 @@ def _debug_reid() -> bool:
     return os.getenv("DEBUG_REID", "").lower() in ("1", "true")
 
 
-# ── Tracklet association (Fase 2) ──────────────────────────────────────────────
-# Skor asosiasi = cosine similarity murni (dulu ada juga suku waktu-antar-
-# kemunculan & transisi-antar-kamera, dihapus — w_reid dipakai 1.0, dua suku
-# lain 0, jadi gak pernah nyumbang skor apa pun; lihat git history kalau perlu
-# dihidupkan lagi).
-# ASSOC_THRESHOLD didefinisikan di app.schemas (satu sumber, dipakai juga sebagai
-# default reid_threshold di ProcessVideoRequest/StreamStartRequest).
-TRACKLET_GAP_CYCLES    = 15       # siklus LOKAL kamera (frame_idx, lihat batch_processor.py)
-                                   # tanpa track ini → tutup tracklet. Bukan wall-clock: itu
-                                   # rapuh terhadap backlog frame_q (lag pemrosesan salah
-                                   # kebaca sebagai "orang sudah pergi").
+# ── Tracklet association ──────────────────────────────────────────────
+# Skor asosiasi = cosine similarity murni (suku waktu/transisi-antar-kamera lama sudah dihapus, w_reid=1.0).
+# ASSOC_THRESHOLD didefinisikan di app.schemas — satu sumber, dipakai juga sebagai default reid_threshold.
+TRACKLET_GAP_CYCLES    = 15       # siklus LOKAL kamera tanpa track → tutup tracklet (bukan wall-clock, kebal backlog frame_q)
 TRACKLET_MAX_DURATION  = 600.0    # detik — tutup paksa + buka tracklet baru dengan key sama
 TRACKLET_MAX_SAMPLES   = 16       # maks embedding disimpan per tracklet (top-K by quality)
 TRACKLET_MAX_POSITIONS = 120      # maks titik kaki disimpan per tracklet (garis lintasan/heatmap)
-# Fold fragmen tracker: FPS rendah bisa pecah 1 orang jadi >1 track_id yang
-# overlap waktu di kamera sama. Tracklet pendek (n_det<=MAX) yang overlap waktu
-# dgn tracklet terbuka lain dan embedding tak jelas beda orang (>=MIN_SIM)
-# dilipat ke situ, bukan jadi identitas baru — bar SIM longgar, prior spatial kuat.
+# Fold fragmen tracker: FPS rendah bisa pecah 1 orang jadi >1 track_id yang overlap waktu di kamera sama — dilipat ke tracklet terbuka lain, bukan jadi identitas baru.
 CONCURRENT_FRAGMENT_MAX_DET = 12
 CONCURRENT_FRAGMENT_MIN_SIM = 0.52
 
@@ -96,13 +83,13 @@ class Tracklet:
 
 
 def par_attrs(par, crop: "np.ndarray | None") -> "dict | None":
-    """PAR (Fase 3) — atribut penampilan + warna baju dari satu crop terbaik.
+    """PAR — atribut penampilan + warna baju dari satu crop terbaik.
     Fungsi lepas (bukan method IdentityDB) supaya bisa dipanggil dari thread
     mana pun — dipakai dari worker background _PostQueue (backend_client.py
     post_tracklet), BUKAN dari thread inferensi utama: ~2.3s/crop (didominasi
     CLIP ViT-L/14) akan menahan semua kamera kalau dijalankan di sana.
     None kalau PAR tidak aktif atau crop tidak ada. Skor mentah (sigmoid),
-    bukan boolean — threshold bisa diubah belakangan tanpa hitung ulang (ADR-006)."""
+    bukan boolean — threshold bisa diubah belakangan tanpa hitung ulang."""
     if par is None or crop is None or crop.size == 0:
         return None
     from app.par.par_service import ATTR_NAMES
@@ -122,7 +109,7 @@ def par_attrs(par, crop: "np.ndarray | None") -> "dict | None":
 def _padded_crop(frame: np.ndarray, x1: int, y1: int, x2: int, y2: int) -> np.ndarray:
     """Crop diperbesar dari titik tengah box, minimal 120x240 px. Satu-satunya
     sumber thumbnail tracklet — menggantikan snapshot-per-deteksi dan
-    profile-thumbnail terpisah yang ada sebelum Fase 2."""
+    profile-thumbnail terpisah yang ada sebelumnya."""
     fh, fw = frame.shape[:2]
     cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
     half_w = max((x2 - x1) // 2 + 30, 60)
@@ -136,8 +123,7 @@ def _padded_crop(frame: np.ndarray, x1: int, y1: int, x2: int, y2: int) -> np.nd
 
 class IdentityDB:
     """Identity database berbasis tracklet untuk live stream pipeline.
-    Lihat plan/07-fase2-detail.md untuk lifecycle lengkap. Bukan dipakai oleh
-    process_video() — itu pakai _LegacyIdentityDB di bawah."""
+    Bukan dipakai oleh process_video() — itu pakai _LegacyIdentityDB di bawah."""
 
     def __init__(
         self, reid_threshold: float, camera_id: str = "",
@@ -156,14 +142,14 @@ class IdentityDB:
         self._open: dict[tuple[str, int], Tracklet] = {}
 
         self._count = 0
-        self._par = par_extractor  # PARExtractor | None — dipakai Fase 3
+        self._par = par_extractor  # PARExtractor | None
 
     def _key(self, track_id: int, cam_id: str) -> tuple[str, int]:
         return (cam_id or self._camera_id, track_id)
 
     def _new_names(self, cam_id: str = "") -> tuple[str, str]:
         """Returns (display_name, unique_label). Label menyertakan camera_id
-        dan tanggal agar unik di seluruh kamera (ADR-001 — tidak menembus hari)."""
+        dan tanggal agar unik di seluruh kamera — sengaja tidak menembus hari."""
         self._count += 1
         today   = datetime.now().strftime("%Y%m%d")
         display = f"Unknown #{self._count}"
@@ -195,9 +181,7 @@ class IdentityDB:
             tl.best_conf = conf
             tl.best_crop = _padded_crop(frame, x1, y1, x2, y2)
             tl.best_x, tl.best_y = foot_point_xyxy(x1, y1, x2, y2)
-        # Titik kaki DISIMPAN TIAP OBSERVE, bukan cuma sampel best_conf — ini
-        # yang membuat "garis lintasan" beneran punya beberapa titik untuk
-        # disambung, bukan cuma satu titik ringkasan per tracklet.
+        # Titik kaki DISIMPAN TIAP OBSERVE, bukan cuma sampel best_conf — supaya "garis lintasan" punya beberapa titik, bukan cuma satu ringkasan.
         if len(tl.positions) >= TRACKLET_MAX_POSITIONS:
             tl.positions.pop(0)
         tl.positions.append(foot_point_xyxy(x1, y1, x2, y2))
@@ -209,11 +193,10 @@ class IdentityDB:
     @staticmethod
     def _add_sample(tl: Tracklet, emb: np.ndarray, quality: float,
                     crop: "np.ndarray | None" = None, ts: float = 0.0) -> None:
-        # Sebar sample MERATA sepanjang umur tracklet, bukan ambil 16 yang paling
-        # tajam — frame tajam ngumpul di satu momen (orang pas dekat/fokus) →
-        # 16 sample jadi satu pose, embedding nggak mewakili. Pas penuh: buang
-        # sample dari kluster waktu terpadat kalau sample baru mengisi celah;
-        # kalau nggak, cukup ganti yang lebih buram di sekitarnya.
+        # Sebar sample MERATA sepanjang umur tracklet, bukan ambil 16 paling tajam
+        # (tajam ngumpul di satu momen → embedding jadi satu pose, nggak mewakili).
+        # Pas penuh: buang sample dari kluster waktu terpadat kalau sample baru
+        # mengisi celah; kalau nggak, ganti yang lebih buram di sekitarnya.
         def _put(i):
             tl.samples[i] = (emb, quality)
             if _debug_reid() and i < len(tl.sample_crops):
@@ -384,11 +367,9 @@ class IdentityDB:
 
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         margin = score - top2_score
-        # top1/top2 = kandidat terdekat di galeri + skor cosine-nya; margin = selisihnya.
         cand = (f"top1={top1_name!r}:{score:.3f} top2={top2_name!r}:{top2_score:.3f} "
                 f"margin={margin:.3f}")
-        # score >= threshold tapi tetap NEW berarti ditolak gate margin (MIN_MARGIN),
-        # bukan skor kurang — dua kandidat teratas terlalu dekat untuk dipercaya.
+        # score >= threshold tapi tetap NEW = ditolak gate margin (MIN_MARGIN), dua kandidat teratas terlalu dekat.
         if is_new and score >= self.threshold:
             reason = f"{cand} → margin < {MIN_MARGIN}, tolak"
         elif is_new:
@@ -419,7 +400,7 @@ class IdentityDB:
             "embedding":    emb,
             "assoc_score":  score,
             "folded_track_ids": tl.folded_track_ids,
-            # PAR (Fase 3) TIDAK dihitung di sini — ~2.3s/crop akan menahan
+            # PAR TIDAK dihitung di sini — ~2.3s/crop akan menahan
             # thread inferensi utama untuk SEMUA kamera. par_attrs() dipanggil
             # nanti di worker background _PostQueue (backend_client.py).
             "par":          self._par,
@@ -462,9 +443,7 @@ class IdentityDB:
 
     def _bank_update(self, name: str, emb: np.ndarray, cam_id: str, *,
                      match_score: float = 1.0, margin: float = 1.0) -> None:
-        # Aware UTC — harus konsisten dengan started_at/ended_at yang dipakai
-        # associate()/load_gallery(), kalau tidak prune_banks() crash saat
-        # membandingkan entry lokal (naive) dengan entry hasil load_gallery (aware).
+        # Aware UTC — harus konsisten dengan started_at/ended_at, kalau tidak prune_banks() crash saat compare entry naive vs aware.
         bank = self._embeddings.get(name)
         if not bank:
             return
@@ -478,11 +457,7 @@ class IdentityDB:
             bank[best_idx]["emb"]        = merged / (np.linalg.norm(merged) + 1e-8)
             bank[best_idx]["last_match"] = now
         elif match_score < BANK_EXPAND_MIN and margin < BANK_EXPAND_MARGIN:
-            # match tipis DAN ambigu → jangan ekspansi bank, cukup jaga entry
-            # terdekat tetap fresh. Kalau margin lebar (top1 jelas ngungguli
-            # top2) walau skor sedang, view ini tetap layak masuk bank —
-            # tanpa ini bank nggak pernah dapet view cross-camera (skor cross-cam
-            # jarang nyampe BANK_EXPAND_MIN) dan matching cross-cam macet.
+            # Match tipis DAN ambigu → jangan ekspansi bank, cuma refresh entry terdekat. Margin lebar tetap masuk bank walau skor sedang, atau bank nggak pernah dapet view cross-camera.
             bank[best_idx]["last_match"] = now
         else:
             new_entry = {"emb": emb, "last_match": now, "cam_id": cam_id}
@@ -492,13 +467,14 @@ class IdentityDB:
             else:
                 bank.append(new_entry)
 
-    # ── Pemulihan gallery dari DB (§7) ───────────────────────────────────────
+    # ── Pemulihan gallery dari DB ───────────────────────────────────────
 
     def load_gallery(self, entries: list[dict]) -> None:
         """entries: [{person_id, person_label, camera_id, started_at, ended_at,
         embedding}] — hasil GET /tracklets/gallery, maks 5 entri terbaru/orang
         (sudah dibatasi backend). Dipanggil sekali saat stream/start. Hanya
-        tracklet hari ini yang dimuat — konsekuensi ADR-001."""
+        tracklet hari ini yang dimuat, karena label unik per hari (lihat
+        _new_names)."""
         max_count = 0
         for e in entries:
             label   = e["person_label"]
@@ -563,8 +539,8 @@ class IdentityDB:
 
 
 # ── Legacy: dipakai HANYA oleh process_video() (analisis file offline) ────────
-# Di luar cakupan Fase 2. Logika identik dengan sebelum Fase 2 — lihat
-# plan/07-fase2-detail.md untuk alasan kenapa dipisah dari IdentityDB di atas.
+# Logikanya sengaja dibiarkan terpisah dari IdentityDB di atas dan tidak
+# ikut berubah, supaya alat analisis offline ini stabil.
 
 EMBED_REFRESH      = 15
 MIN_ENROLL_FRAMES  = 2      # delayed enrollment: tunggu N frame berkualitas
