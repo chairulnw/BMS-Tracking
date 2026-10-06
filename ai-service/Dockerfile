@@ -24,7 +24,7 @@ COPY requirements.txt .
 # heavy enough to make the whole service unresponsive under real load
 # (observed: 502s / connection-refused from backend while ai-service was
 # "Up" but pegged doing CPU inference).
-RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu124
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 

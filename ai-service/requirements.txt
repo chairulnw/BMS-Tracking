@@ -13,4 +13,4 @@ uvicorn[standard]>=0.30.0
 python-dotenv>=1.0.0
 PyJWT>=2.9.0
 psutil>=6.0.0
-# kalau perlu fitur warna pakaian: git+https://github.com/openai/CLIP.git
+git+https://github.com/openai/CLIP.git

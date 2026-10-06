@@ -1,4 +1,4 @@
-<div class="sidebar">
+<div class="sidebar" [class.collapsed]="collapsed">
   <!-- Logo -->
   <div class="sidebar-logo">
     <svg class="logo-dot" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -6,6 +6,11 @@
       <rect x="5" y="5" width="14" height="14" rx="7" fill="white"/>
     </svg>
     <span class="logo-text">SPOT</span>
+    <button class="toggle-btn" (click)="collapsed = !collapsed" [attr.aria-label]="collapsed ? 'Perluas sidebar' : 'Ciutkan sidebar'">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 6h18M3 12h18M3 18h18"/>
+      </svg>
+    </button>
   </div>
 
   <!-- User -->
@@ -47,7 +52,7 @@
       </svg>
     </div>
 
-    @if (kameraOpen) {
+    @if (kameraOpen && !collapsed) {
       <div class="sub-menu">
         <a routerLink="/overview" routerLinkActive="active" class="nav-item sub-item">Overview</a>
         <a routerLink="/liveview" routerLinkActive="active" class="nav-item sub-item">Live View</a>

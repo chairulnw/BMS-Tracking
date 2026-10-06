@@ -8,7 +8,6 @@ html, body {
 }
 
 app-sidebar {
-  width: 256px;
   flex-shrink: 0;
 }
 

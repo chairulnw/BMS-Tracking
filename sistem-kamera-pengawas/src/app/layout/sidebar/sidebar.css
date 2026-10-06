@@ -183,3 +183,40 @@
   background: #E7000B;
   color: #FFFFFF;
 }
+
+/* ── Collapse ─────────────────────────────── */
+.sidebar { transition: width 0.2s ease; }
+
+.toggle-btn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: #D1D5DC;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+}
+
+.toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.sidebar.collapsed { width: 64px; }
+
+.sidebar.collapsed .logo-text,
+.sidebar.collapsed .user-info,
+.sidebar.collapsed .logout-btn,
+.sidebar.collapsed .nav-label,
+.sidebar.collapsed .chevron {
+  display: none;
+}
+
+.sidebar.collapsed .sidebar-logo {
+  flex-direction: column;
+  padding: 16px 0 8px;
+}
+
+.sidebar.collapsed .toggle-btn { margin-left: 0; }
+.sidebar.collapsed .user-section { justify-content: center; padding: 12px 0; }
+.sidebar.collapsed .nav-item { justify-content: center; padding: 9px 0; }

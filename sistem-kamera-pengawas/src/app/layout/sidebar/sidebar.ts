@@ -13,6 +13,7 @@ export class Sidebar {
   private auth = inject(AuthService);
 
   kameraOpen = true;
+  collapsed = false;
 
   logout(): void {
     this.auth.logout();
